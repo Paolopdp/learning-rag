@@ -1,0 +1,39 @@
+from __future__ import annotations
+
+from fastapi.testclient import TestClient
+
+from app.main import app
+
+
+def test_query_returns_citations_for_golden_queries(monkeypatch) -> None:
+    client = TestClient(app)
+    ingest = client.post("/ingest/demo")
+    assert ingest.status_code == 200
+
+    cases = [
+        (
+            "Che cos’è SPID e a cosa serve?",
+            ["SPID"],
+        ),
+        (
+            "Qual è il ruolo di PagoPA?",
+            ["PagoPA"],
+        ),
+        (
+            "Cos’è l’ANPR e come si collega al Codice dell’Amministrazione Digitale?",
+            ["Anagrafe nazionale della popolazione residente", "Codice dell'amministrazione digitale"],
+        ),
+    ]
+
+    for question, expected_titles in cases:
+        response = client.post(
+            "/query",
+            json={"question": question, "top_k": 3},
+        )
+        assert response.status_code == 200
+        payload = response.json()
+
+        assert payload["answer"]
+        assert payload["citations"]
+        titles = {c["source_title"] for c in payload["citations"]}
+        assert any(expected in titles for expected in expected_titles)
