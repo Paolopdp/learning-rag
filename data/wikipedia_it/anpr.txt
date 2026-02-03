@@ -1,0 +1,6 @@
+Titolo: Anagrafe nazionale della popolazione residente
+Fonte: https://it.wikipedia.org/wiki/Anagrafe_nazionale_della_popolazione_residente
+Licenza: CC BY-SA 4.0
+Accesso: 2026-02-03
+
+L'anagrafe nazionale della popolazione residente (in sigla ANPR) è il registro anagrafico centrale italiano, istituito presso il Ministero dell'interno, ed è attualmente regolato dall'articolo 62 del codice dell'amministrazione digitale del 2005. L'anagrafe nazionale è alimentata dai singoli comuni, che conservano ciascuno il proprio ufficiale dell'anagrafe, che in mancanza di delegazioni è il sindaco. Va distinta dall'anagrafe degli italiani residenti all'estero, che però ne fa ugualmente parte.

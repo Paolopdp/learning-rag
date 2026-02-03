@@ -1,0 +1,23 @@
+[project]
+name = "rag-backend"
+version = "0.1.0"
+description = "RAG backend service"
+requires-python = ">=3.13"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "numpy",
+  "sentence-transformers",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+  "httpx",
+]
+llm = [
+  "llama-cpp-python",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

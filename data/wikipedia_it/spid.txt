@@ -1,0 +1,6 @@
+Titolo: SPID
+Fonte: https://it.wikipedia.org/wiki/SPID
+Licenza: CC BY-SA 4.0
+Accesso: 2026-02-03
+
+Il Sistema Pubblico di Identità Digitale (in acronimo SPID) è il sistema unico di accesso con identità digitale ai servizi online della pubblica amministrazione italiana e dei privati aderenti. Cittadini e imprese possono accedere a tali servizi con un'identità digitale unica che ne permette l'accesso e la fruizione da qualsiasi dispositivo.
