@@ -31,14 +31,17 @@ jobs:
 
   security:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
-        with:
-          args: "--redact"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trivy FS Scan
         uses: aquasecurity/trivy-action@0.24.0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+import logging
 import uuid
 
 from sqlalchemy import select
@@ -11,6 +12,17 @@ from app.sql_models import AuditLogORM
 
 DEFAULT_AUDIT_LIMIT = 50
 MAX_AUDIT_LIMIT = 200
+SENSITIVE_KEYS = {
+    "question",
+    "prompt",
+    "content",
+    "text",
+    "source_title",
+    "source_url",
+    "excerpt",
+}
+
+logger = logging.getLogger(__name__)
 
 
 def audit_enabled() -> bool:
@@ -30,25 +42,39 @@ def log_event(
     try:
         workspace_uuid = uuid.UUID(workspace_id)
     except ValueError as exc:
-        raise ValueError("Invalid workspace id.") from exc
+        logger.warning("audit_log skipped: invalid workspace_id=%s", workspace_id)
+        return
 
     user_uuid = None
     if user_id:
         try:
             user_uuid = uuid.UUID(user_id)
         except ValueError as exc:
-            raise ValueError("Invalid user id.") from exc
+            logger.warning("audit_log skipped: invalid user_id=%s", user_id)
+            return
 
-    with SessionLocal() as session:
-        session.add(
-            AuditLogORM(
-                workspace_id=workspace_uuid,
-                user_id=user_uuid,
-                action=action,
-                payload=payload,
+    safe_payload = _sanitize_payload(payload)
+
+    try:
+        with SessionLocal() as session:
+            session.add(
+                AuditLogORM(
+                    workspace_id=workspace_uuid,
+                    user_id=user_uuid,
+                    action=action,
+                    payload=safe_payload,
+                )
             )
+            session.commit()
+    except Exception:
+        logger.warning(
+            "audit_log failed: action=%s workspace_id=%s user_id=%s",
+            action,
+            workspace_id,
+            user_id,
+            exc_info=True,
         )
-        session.commit()
+        return
 
 
 def list_events(workspace_id: str, *, limit: int = DEFAULT_AUDIT_LIMIT) -> list[AuditLogORM]:
@@ -69,3 +95,13 @@ def list_events(workspace_id: str, *, limit: int = DEFAULT_AUDIT_LIMIT) -> list[
             .limit(safe_limit)
         )
         return session.execute(stmt).scalars().all()
+
+
+def _sanitize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for key, value in payload.items():
+        if key in SENSITIVE_KEYS:
+            sanitized[key] = "[redacted]"
+        else:
+            sanitized[key] = value
+    return sanitized

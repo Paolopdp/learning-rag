@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.audit import audit_enabled, list_events, log_event
 from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
-from app.config import auth_disabled, cors_origins, wikipedia_it_dir
+from app.config import auth_disabled, cors_origins, system_workspace_id, wikipedia_it_dir
 from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
@@ -46,6 +46,13 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+def require_workspace_uuid(workspace_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(workspace_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid workspace id.") from exc
+
+
 @app.post("/auth/register", response_model=AuthResponse)
 def register(payload: RegisterRequest) -> AuthResponse:
     with SessionLocal() as session:
@@ -70,6 +77,18 @@ def register(payload: RegisterRequest) -> AuthResponse:
         )
         session.add(membership)
         session.commit()
+
+        if audit_enabled():
+            domain = payload.email.split("@")[-1] if "@" in payload.email else "unknown"
+            log_event(
+                workspace_id=str(workspace.id),
+                user_id=str(user.id),
+                action="auth_register",
+                payload={
+                    "email_domain": domain,
+                    "method": "password",
+                },
+            )
 
         token = create_access_token(str(user.id), user.email)
         return AuthResponse(
@@ -107,6 +126,19 @@ def login(payload: LoginRequest) -> AuthResponse:
                 "name": workspace.name,
                 "role": role,
             }
+            workspace_id = str(workspace.id)
+        else:
+            workspace_id = system_workspace_id()
+
+        if audit_enabled():
+            log_event(
+                workspace_id=workspace_id,
+                user_id=str(user.id),
+                action="auth_login",
+                payload={
+                    "method": "password",
+                },
+            )
 
         token = create_access_token(str(user.id), user.email)
         return AuthResponse(
@@ -156,6 +188,7 @@ def ingest_demo(
     workspace_id: str,
     current_user: UserContext = Depends(get_current_user),
 ) -> IngestResponse:
+    require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
 
     documents = load_documents_from_dir(wikipedia_it_dir(), workspace_id=workspace_id)
@@ -170,7 +203,6 @@ def ingest_demo(
         payload={
             "documents": len(documents),
             "chunks": len(chunks),
-            "sample_titles": [doc.title for doc in documents[:3]],
             "source": "wikipedia_it",
         },
     )
@@ -183,6 +215,7 @@ def query(
     request: QueryRequest,
     current_user: UserContext = Depends(get_current_user),
 ) -> QueryResponse:
+    require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
 
     if not chunk_store.has_workspace_data(workspace_id):
@@ -210,10 +243,8 @@ def query(
         user_id=None if auth_disabled() else current_user.id,
         action="query",
         payload={
-            "question": request.question,
             "top_k": request.top_k,
             "results": len(results),
-            "top_sources": [result.chunk.source_title for result in results],
             "llm_used": llm_enabled(),
         },
     )
@@ -237,6 +268,7 @@ def audit_log(
     limit: int = 50,
     current_user: UserContext = Depends(get_current_user),
 ) -> list[AuditEvent]:
+    require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
 
     if not audit_enabled():
