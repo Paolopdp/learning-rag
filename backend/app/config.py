@@ -29,3 +29,13 @@ def database_url() -> str:
 
 def embedding_dim() -> int:
     return int(os.getenv("RAG_EMBEDDING_DIM", "384"))
+
+
+def cors_origins() -> list[str]:
+    origins = os.getenv("RAG_CORS_ORIGINS")
+    if origins:
+        return [origin.strip() for origin in origins.split(",") if origin.strip()]
+    return [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]

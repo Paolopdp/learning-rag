@@ -75,6 +75,18 @@ curl -X POST http://127.0.0.1:8000/query \
 curl "http://127.0.0.1:8000/chunks?limit=3"
 ```
 
+## Frontend (Minimal UI)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Set API base if needed:
+```bash
+export NEXT_PUBLIC_API_BASE=http://127.0.0.1:8000
+```
+
 ## Local LLM (Optional)
 The LLM path is **disabled by default** and only used when `RAG_USE_LLM=1`.
 

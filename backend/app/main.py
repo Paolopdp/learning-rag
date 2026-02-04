@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.config import wikipedia_it_dir
+from app.config import cors_origins, wikipedia_it_dir
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
@@ -10,6 +11,14 @@ from app.store import get_chunk_store
 app = FastAPI(title="RAG Backend", version="0.1.0")
 
 chunk_store = get_chunk_store()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins(),
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
