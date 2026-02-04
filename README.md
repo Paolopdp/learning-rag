@@ -115,6 +115,27 @@ uvicorn app.main:app --reload
 
 More details: `docs/llm.md`.
 
+## Observability (Optional)
+Enable OpenTelemetry tracing (console exporter by default):
+```bash
+export RAG_OTEL_ENABLED=1
+uv pip install -e ".[dev,observability]"
+uvicorn app.main:app --reload
+```
+
+To export to an OTLP collector:
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318/v1/traces
+export OTEL_SERVICE_NAME=rag-backend
+```
+
+Start a local collector (Jaeger):
+```bash
+docker compose --profile observability up -d jaeger
+```
+
+Then open the UI at `http://localhost:16686`.
+
 ## Auth Configuration
 Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)

@@ -9,6 +9,15 @@ services:
       - "5432:5432"
     volumes:
       - rag_pgdata:/var/lib/postgresql/data
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    profiles:
+      - observability
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4318:4318"
 
 volumes:
   rag_pgdata:

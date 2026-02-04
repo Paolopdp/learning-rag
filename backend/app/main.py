@@ -10,6 +10,7 @@ from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
+from app.observability import configure_otel
 from app.schemas import (
     AuthResponse,
     IngestResponse,
@@ -26,6 +27,8 @@ from app.store import get_chunk_store
 app = FastAPI(title="RAG Backend", version="0.1.0")
 
 chunk_store = get_chunk_store()
+
+configure_otel(app)
 
 app.add_middleware(
     CORSMiddleware,
