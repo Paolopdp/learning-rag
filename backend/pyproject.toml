@@ -11,6 +11,8 @@ dependencies = [
   "alembic",
   "psycopg[binary]",
   "pgvector",
+  "bcrypt",
+  "python-jose[cryptography]",
   "sentence-transformers",
 ]
 

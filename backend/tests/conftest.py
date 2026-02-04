@@ -7,3 +7,4 @@ import pytest
 def _default_test_env(monkeypatch) -> None:
     monkeypatch.setenv("RAG_EMBEDDING_BACKEND", "hash")
     monkeypatch.setenv("RAG_USE_LLM", "0")
+    monkeypatch.setenv("RAG_AUTH_DISABLED", "1")

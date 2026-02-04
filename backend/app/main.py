@@ -1,11 +1,26 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+import uuid
 
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import select
+
+from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
 from app.config import cors_origins, wikipedia_it_dir
+from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
+from app.schemas import (
+    AuthResponse,
+    IngestResponse,
+    LoginRequest,
+    QueryRequest,
+    QueryResponse,
+    RegisterRequest,
+    WorkspaceCreateRequest,
+    WorkspaceOut,
+)
+from app.sql_models import UserORM, WorkspaceMemberORM, WorkspaceORM
 from app.store import get_chunk_store
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
@@ -26,57 +41,141 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/ingest/demo")
-def ingest_demo() -> dict[str, int]:
-    documents = load_documents_from_dir(wikipedia_it_dir())
+@app.post("/auth/register", response_model=AuthResponse)
+def register(payload: RegisterRequest) -> AuthResponse:
+    with SessionLocal() as session:
+        existing = session.execute(
+            select(UserORM).where(UserORM.email == payload.email)
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=400, detail="Email already registered.")
+
+        user = UserORM(
+            email=payload.email,
+            hashed_password=hash_password(payload.password),
+        )
+        workspace = WorkspaceORM(name="Default Workspace")
+        session.add_all([user, workspace])
+        session.flush()
+
+        membership = WorkspaceMemberORM(
+            user_id=user.id,
+            workspace_id=workspace.id,
+            role="admin",
+        )
+        session.add(membership)
+        session.commit()
+
+        token = create_access_token(str(user.id), user.email)
+        return AuthResponse(
+            access_token=token,
+            user={"id": str(user.id), "email": user.email},
+            default_workspace={
+                "id": str(workspace.id),
+                "name": workspace.name,
+                "role": "admin",
+            },
+        )
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest) -> AuthResponse:
+    with SessionLocal() as session:
+        user = session.execute(
+            select(UserORM).where(UserORM.email == payload.email)
+        ).scalar_one_or_none()
+        if not user or not verify_password(payload.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid credentials.")
+
+        workspace_row = session.execute(
+            select(WorkspaceORM, WorkspaceMemberORM.role)
+            .join(WorkspaceMemberORM, WorkspaceMemberORM.workspace_id == WorkspaceORM.id)
+            .where(WorkspaceMemberORM.user_id == user.id)
+            .limit(1)
+        ).first()
+
+        default_workspace = None
+        if workspace_row:
+            workspace, role = workspace_row
+            default_workspace = {
+                "id": str(workspace.id),
+                "name": workspace.name,
+                "role": role,
+            }
+
+        token = create_access_token(str(user.id), user.email)
+        return AuthResponse(
+            access_token=token,
+            user={"id": str(user.id), "email": user.email},
+            default_workspace=default_workspace,
+        )
+
+
+@app.get("/workspaces", response_model=list[WorkspaceOut])
+def list_workspaces(current_user: UserContext = Depends(get_current_user)) -> list[WorkspaceOut]:
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(WorkspaceORM, WorkspaceMemberORM.role)
+            .join(WorkspaceMemberORM, WorkspaceMemberORM.workspace_id == WorkspaceORM.id)
+            .where(WorkspaceMemberORM.user_id == uuid.UUID(current_user.id))
+        ).all()
+        return [
+            WorkspaceOut(id=str(workspace.id), name=workspace.name, role=role)
+            for workspace, role in rows
+        ]
+
+
+@app.post("/workspaces", response_model=WorkspaceOut)
+def create_workspace(
+    payload: WorkspaceCreateRequest,
+    current_user: UserContext = Depends(get_current_user),
+) -> WorkspaceOut:
+    with SessionLocal() as session:
+        workspace = WorkspaceORM(name=payload.name)
+        session.add(workspace)
+        session.flush()
+
+        membership = WorkspaceMemberORM(
+            user_id=uuid.UUID(current_user.id),
+            workspace_id=workspace.id,
+            role="admin",
+        )
+        session.add(membership)
+        session.commit()
+
+        return WorkspaceOut(id=str(workspace.id), name=workspace.name, role="admin")
+
+
+@app.post("/workspaces/{workspace_id}/ingest/demo", response_model=IngestResponse)
+def ingest_demo(
+    workspace_id: str,
+    current_user: UserContext = Depends(get_current_user),
+) -> IngestResponse:
+    require_workspace_role(workspace_id, current_user)
+
+    documents = load_documents_from_dir(wikipedia_it_dir(), workspace_id=workspace_id)
     chunks = chunk_documents(documents)
     embeddings = embed_texts([chunk.content for chunk in chunks])
-    chunk_store.clear()
+    chunk_store.clear_workspace(workspace_id)
     chunk_store.add_many(documents, chunks, embeddings)
-    return {"documents": len(documents), "chunks": len(chunks)}
+    return IngestResponse(documents=len(documents), chunks=len(chunks))
 
 
-@app.get("/chunks")
-def list_chunks(limit: int = 5) -> list[dict[str, str | int | None]]:
-    items = chunk_store.all(limit=limit)
-    return [
-        {
-            "chunk_id": chunk.chunk_id,
-            "document_id": chunk.document_id,
-            "chunk_index": chunk.chunk_index,
-            "content": chunk.content,
-            "source_title": chunk.source_title,
-            "source_url": chunk.source_url,
-        }
-        for chunk in items
-    ]
+@app.post("/workspaces/{workspace_id}/query", response_model=QueryResponse)
+def query(
+    workspace_id: str,
+    request: QueryRequest,
+    current_user: UserContext = Depends(get_current_user),
+) -> QueryResponse:
+    require_workspace_role(workspace_id, current_user)
 
-
-class QueryRequest(BaseModel):
-    question: str = Field(min_length=1)
-    top_k: int = Field(default=3, ge=1, le=10)
-
-
-class Citation(BaseModel):
-    chunk_id: str
-    source_title: str
-    source_url: str | None
-    score: float
-    excerpt: str
-
-
-class QueryResponse(BaseModel):
-    answer: str
-    citations: list[Citation]
-
-
-@app.post("/query", response_model=QueryResponse)
-def query(request: QueryRequest) -> QueryResponse:
-    if not chunk_store.all(limit=1):
+    if not chunk_store.has_workspace_data(workspace_id):
         raise HTTPException(status_code=400, detail="No data ingested yet.")
 
     query_embedding = embed_text(request.question)
-    results = chunk_store.search(query_embedding, top_k=request.top_k)
+    results = chunk_store.search(
+        query_embedding, top_k=request.top_k, workspace_id=workspace_id
+    )
 
     if not results:
         return QueryResponse(answer="Nessun risultato.", citations=[])
@@ -89,14 +188,15 @@ def query(request: QueryRequest) -> QueryResponse:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     else:
         answer = top_chunks[0].content
+
     citations = [
-        Citation(
-            chunk_id=result.chunk.chunk_id,
-            source_title=result.chunk.source_title,
-            source_url=result.chunk.source_url,
-            score=result.score,
-            excerpt=result.chunk.content[:200],
-        )
+        {
+            "chunk_id": result.chunk.chunk_id,
+            "source_title": result.chunk.source_title,
+            "source_url": result.chunk.source_url,
+            "score": result.score,
+            "excerpt": result.chunk.content[:200],
+        }
         for result in results
     ]
     return QueryResponse(answer=answer, citations=citations)

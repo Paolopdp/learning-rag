@@ -15,14 +15,14 @@ _HEADER_KEYS = {
 }
 
 
-def load_documents_from_dir(directory: Path) -> list[Document]:
+def load_documents_from_dir(directory: Path, workspace_id: str) -> list[Document]:
     documents: list[Document] = []
     for path in sorted(directory.glob("*.txt")):
-        documents.append(parse_wikipedia_file(path))
+        documents.append(parse_wikipedia_file(path, workspace_id=workspace_id))
     return documents
 
 
-def parse_wikipedia_file(path: Path) -> Document:
+def parse_wikipedia_file(path: Path, workspace_id: str | None = None) -> Document:
     raw = path.read_text(encoding="utf-8")
     header, body = _split_header_body(raw)
     metadata = _parse_header(header)
@@ -37,6 +37,7 @@ def parse_wikipedia_file(path: Path) -> Document:
         raise ValueError(f"Empty document body: {path}")
 
     return Document(
+        workspace_id=workspace_id,
         title=title,
         source_url=source_url,
         license=license_text,
@@ -51,6 +52,8 @@ def chunk_document(
     chunk_size: int = 600,
     overlap: int = 120,
 ) -> list[Chunk]:
+    if not document.workspace_id:
+        raise ValueError("Document is missing workspace_id.")
     if chunk_size <= 0:
         raise ValueError("chunk_size must be > 0")
     if overlap < 0:
@@ -75,6 +78,7 @@ def chunk_document(
             chunks.append(
                 Chunk(
                     document_id=document.document_id,
+                    workspace_id=document.workspace_id,
                     content=content,
                     start_char=start,
                     end_char=end,
@@ -141,6 +145,7 @@ def _normalize_text(text: str) -> str:
 
 def document_debug_dict(document: Document) -> dict[str, str | None]:
     return {
+        "workspace_id": document.workspace_id,
         "title": document.title,
         "source_url": document.source_url,
         "license": document.license,

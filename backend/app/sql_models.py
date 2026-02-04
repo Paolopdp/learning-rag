@@ -19,6 +19,9 @@ class DocumentORM(Base):
     __tablename__ = "documents"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     license: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -26,6 +29,7 @@ class DocumentORM(Base):
     text: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
+    workspace: Mapped["WorkspaceORM"] = relationship(back_populates="documents")
     chunks: Mapped[list["ChunkORM"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
@@ -36,6 +40,9 @@ class ChunkORM(Base):
     __tablename__ = "chunks"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
     document_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("documents.id", ondelete="CASCADE"),
@@ -50,3 +57,47 @@ class ChunkORM(Base):
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     document: Mapped[DocumentORM] = relationship(back_populates="chunks")
+
+
+class UserORM(Base):
+    __tablename__ = "users"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    hashed_password: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    memberships: Mapped[list["WorkspaceMemberORM"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class WorkspaceORM(Base):
+    __tablename__ = "workspaces"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    members: Mapped[list["WorkspaceMemberORM"]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+    documents: Mapped[list[DocumentORM]] = relationship(
+        back_populates="workspace", cascade="all, delete-orphan"
+    )
+
+
+class WorkspaceMemberORM(Base):
+    __tablename__ = "workspace_members"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), primary_key=True
+    )
+    role: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    user: Mapped[UserORM] = relationship(back_populates="memberships")
+    workspace: Mapped[WorkspaceORM] = relationship(back_populates="members")

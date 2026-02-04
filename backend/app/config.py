@@ -39,3 +39,19 @@ def cors_origins() -> list[str]:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+
+def auth_disabled() -> bool:
+    return os.getenv("RAG_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
+
+
+def jwt_secret() -> str:
+    return os.getenv("RAG_JWT_SECRET", "dev-secret-change-me")
+
+
+def jwt_algorithm() -> str:
+    return os.getenv("RAG_JWT_ALGORITHM", "HS256")
+
+
+def jwt_exp_minutes() -> int:
+    return int(os.getenv("RAG_JWT_EXP_MINUTES", "60"))

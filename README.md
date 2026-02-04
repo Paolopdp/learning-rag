@@ -63,16 +63,28 @@ SMOKE_DB_RESET=1 ./scripts/smoke_postgres.sh
 
 ## Demo: Ingest + Query
 ```bash
-# Ingest the demo dataset
-curl -X POST http://127.0.0.1:8000/ingest/demo
+# Register a user (creates a default workspace)
+curl -X POST http://127.0.0.1:8000/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@local","password":"change-me-now"}'
+
+# Login (get token if already registered)
+curl -X POST http://127.0.0.1:8000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"demo@local","password":"change-me-now"}'
+
+# Ingest the demo dataset (replace WORKSPACE_ID + TOKEN)
+curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/ingest/demo \
+  -H "Authorization: Bearer TOKEN"
 
 # Ask a question (extractive answer + citations)
-curl -X POST http://127.0.0.1:8000/query \
+curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/query \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
   -d '{"question": "Che cos’è SPID e a cosa serve?", "top_k": 3}'
 
-# Preview stored chunks
-curl "http://127.0.0.1:8000/chunks?limit=3"
+# List workspaces
+curl -H "Authorization: Bearer TOKEN" http://127.0.0.1:8000/workspaces
 ```
 
 ## Frontend (Minimal UI)
@@ -102,6 +114,12 @@ uvicorn app.main:app --reload
 ```
 
 More details: `docs/llm.md`.
+
+## Auth Configuration
+Environment variables:
+- `RAG_JWT_SECRET` (required in production; default is dev-only)
+- `RAG_AUTH_DISABLED=1` to bypass auth (tests/dev only)
+- `RAG_CORS_ORIGINS` to override allowed origins (comma-separated)
 
 ## Tests
 ```bash

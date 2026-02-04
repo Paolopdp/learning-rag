@@ -5,9 +5,10 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 
-def test_query_returns_citations_for_golden_queries(monkeypatch) -> None:
+def test_query_returns_citations_for_golden_queries() -> None:
     client = TestClient(app)
-    ingest = client.post("/ingest/demo")
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    ingest = client.post(f"/workspaces/{workspace_id}/ingest/demo")
     assert ingest.status_code == 200
 
     cases = [
@@ -27,7 +28,7 @@ def test_query_returns_citations_for_golden_queries(monkeypatch) -> None:
 
     for question, expected_titles in cases:
         response = client.post(
-            "/query",
+            f"/workspaces/{workspace_id}/query",
             json={"question": question, "top_k": 3},
         )
         assert response.status_code == 200

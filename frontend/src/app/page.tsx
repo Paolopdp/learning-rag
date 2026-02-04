@@ -10,6 +10,12 @@ type IngestResponse = {
   chunks: number;
 };
 
+type Workspace = {
+  id: string;
+  name: string;
+  role: string;
+};
+
 type Citation = {
   chunk_id: string;
   source_title: string;
@@ -21,6 +27,13 @@ type Citation = {
 type QueryResponse = {
   answer: string;
   citations: Citation[];
+};
+
+type AuthResponse = {
+  access_token: string;
+  token_type: string;
+  user: { id: string; email: string };
+  default_workspace: Workspace | null;
 };
 
 const SAMPLE_QUESTIONS = [
@@ -39,6 +52,11 @@ const SAMPLE_QUESTIONS = [
 ];
 
 export default function Home() {
+  const [email, setEmail] = useState("demo@local");
+  const [password, setPassword] = useState("change-me-now");
+  const [token, setToken] = useState<string | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0].text);
   const [topK, setTopK] = useState(3);
   const [ingestInfo, setIngestInfo] = useState<IngestResponse | null>(null);
@@ -46,6 +64,7 @@ export default function Home() {
   const [citations, setCitations] = useState<Citation[]>([]);
   const [busyIngest, setBusyIngest] = useState(false);
   const [busyQuery, setBusyQuery] = useState(false);
+  const [busyAuth, setBusyAuth] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const isReady = useMemo(
@@ -53,13 +72,93 @@ export default function Home() {
     [ingestInfo]
   );
 
+  const canUseApi = Boolean(token && workspace);
+
+  const fetchWorkspaces = async (accessToken: string) => {
+    const response = await fetch(`${API_BASE}/workspaces`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!response.ok) {
+      throw new Error("Failed to load workspaces.");
+    }
+    const payload = (await response.json()) as Workspace[];
+    setWorkspaces(payload);
+    setWorkspace(payload[0] ?? null);
+  };
+
+  const handleRegister = async () => {
+    setBusyAuth(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/auth/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Registration failed.");
+      }
+      const payload = (await response.json()) as AuthResponse;
+      setToken(payload.access_token);
+      setWorkspace(payload.default_workspace);
+      setWorkspaces(payload.default_workspace ? [payload.default_workspace] : []);
+      setIngestInfo(null);
+      setAnswer("");
+      setCitations([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Registration failed.");
+    } finally {
+      setBusyAuth(false);
+    }
+  };
+
+  const handleLogin = async () => {
+    setBusyAuth(true);
+    setError(null);
+    try {
+      const response = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Login failed.");
+      }
+      const payload = (await response.json()) as AuthResponse;
+      setToken(payload.access_token);
+      if (payload.default_workspace) {
+        setWorkspace(payload.default_workspace);
+        setWorkspaces([payload.default_workspace]);
+      } else {
+        await fetchWorkspaces(payload.access_token);
+      }
+      setIngestInfo(null);
+      setAnswer("");
+      setCitations([]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Login failed.");
+    } finally {
+      setBusyAuth(false);
+    }
+  };
+
   const handleIngest = async () => {
+    if (!token || !workspace) {
+      setError("Login first to ingest data.");
+      return;
+    }
     setBusyIngest(true);
     setError(null);
     try {
-      const response = await fetch(`${API_BASE}/ingest/demo`, {
-        method: "POST",
-      });
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/ingest/demo`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+        }
+      );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload?.detail ?? "Ingest failed.");
@@ -75,16 +174,26 @@ export default function Home() {
 
   const handleQuery = async (event: FormEvent) => {
     event.preventDefault();
+    if (!token || !workspace) {
+      setError("Login first to run a query.");
+      return;
+    }
     setBusyQuery(true);
     setError(null);
     setAnswer("");
     setCitations([]);
     try {
-      const response = await fetch(`${API_BASE}/query`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, top_k: topK }),
-      });
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/query`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ question, top_k: topK }),
+        }
+      );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload?.detail ?? "Query failed.");
@@ -135,21 +244,90 @@ export default function Home() {
         <div className="mt-10 grid gap-6 lg:grid-cols-[1fr_1.4fr]">
           <section className="rounded-3xl border border-[color:var(--border)] bg-white/80 p-6 shadow-sm backdrop-blur">
             <h2 className="text-lg font-semibold text-[color:var(--foreground)]">
-              1. Ingest Demo Dataset
+              1. Authenticate
             </h2>
             <p className="mt-2 text-sm text-[color:var(--muted)]">
-              Italian Wikipedia excerpts (SPID, PagoPA, ANPR, CAD). Use this to
-              validate retrieval and citations quickly.
+              Create an account or log in to a workspace.
+            </p>
+            <div className="mt-4 space-y-3">
+              <div>
+                <label className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                  Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-[color:var(--border)] px-4 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                  Password
+                </label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="mt-2 w-full rounded-2xl border border-[color:var(--border)] px-4 py-2 text-sm"
+                />
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleRegister}
+                  disabled={busyAuth}
+                  className="rounded-full bg-[color:var(--accent)] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busyAuth ? "Working..." : "Register"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleLogin}
+                  disabled={busyAuth}
+                  className="rounded-full border border-[color:var(--border)] px-4 py-2 text-sm font-semibold text-[color:var(--foreground)]"
+                >
+                  Login
+                </button>
+              </div>
+              <div className="rounded-2xl bg-[#f9f4ee] px-4 py-3 text-sm text-[color:var(--muted)]">
+                <div className="flex items-center justify-between">
+                  <span>Status</span>
+                  <span className="font-semibold text-[color:var(--foreground)]">
+                    {token ? "Authenticated" : "Not authenticated"}
+                  </span>
+                </div>
+                <div className="mt-2 flex items-center justify-between">
+                  <span>Workspace</span>
+                  <span className="font-semibold text-[color:var(--foreground)]">
+                    {workspace?.name ?? "—"}
+                  </span>
+                </div>
+              </div>
+              {workspaces.length > 1 ? (
+                <div className="text-xs text-[color:var(--muted)]">
+                  {workspaces.length} workspaces available.
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-3xl border border-[color:var(--border)] bg-white/90 p-6 shadow-sm backdrop-blur">
+            <h2 className="text-lg font-semibold text-[color:var(--foreground)]">
+              2. Ingest + Query
+            </h2>
+            <p className="mt-2 text-sm text-[color:var(--muted)]">
+              Italian Wikipedia excerpts (SPID, PagoPA, ANPR, CAD).
             </p>
             <button
               type="button"
               onClick={handleIngest}
-              disabled={busyIngest}
-              className="mt-6 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={busyIngest || !canUseApi}
+              className="mt-4 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
             >
               {busyIngest ? "Ingesting..." : "Ingest Demo"}
             </button>
-            <div className="mt-6 grid gap-3 rounded-2xl bg-[#f9f4ee] px-4 py-4 text-sm text-[color:var(--muted)]">
+            <div className="mt-4 grid gap-3 rounded-2xl bg-[#f9f4ee] px-4 py-4 text-sm text-[color:var(--muted)]">
               <div className="flex items-center justify-between">
                 <span>Documents</span>
                 <span className="font-semibold text-[color:var(--foreground)]">
@@ -169,12 +347,6 @@ export default function Home() {
                 </span>
               </div>
             </div>
-          </section>
-
-          <section className="rounded-3xl border border-[color:var(--border)] bg-white/90 p-6 shadow-sm backdrop-blur">
-            <h2 className="text-lg font-semibold text-[color:var(--foreground)]">
-              2. Ask a Question
-            </h2>
             <form onSubmit={handleQuery} className="mt-4 space-y-4">
               <label className="block text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
                 Question
@@ -211,7 +383,7 @@ export default function Home() {
                 />
                 <button
                   type="submit"
-                  disabled={busyQuery}
+                  disabled={busyQuery || !canUseApi}
                   className="ml-auto inline-flex items-center gap-2 rounded-full bg-[color:var(--foreground)] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {busyQuery ? "Querying..." : "Run Query"}

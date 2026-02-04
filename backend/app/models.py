@@ -7,6 +7,7 @@ from uuid import uuid4
 
 @dataclass(frozen=True)
 class Document:
+    workspace_id: str | None
     title: str
     source_url: str | None
     license: str | None
@@ -18,6 +19,7 @@ class Document:
 @dataclass(frozen=True)
 class Chunk:
     document_id: str
+    workspace_id: str | None
     content: str
     start_char: int
     end_char: int

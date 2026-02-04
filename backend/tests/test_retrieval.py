@@ -8,6 +8,7 @@ def test_top_k_chunks_orders_by_score() -> None:
     chunks = [
         Chunk(
             document_id="doc1",
+            workspace_id="workspace-1",
             content="alpha",
             start_char=0,
             end_char=5,
@@ -17,6 +18,7 @@ def test_top_k_chunks_orders_by_score() -> None:
         ),
         Chunk(
             document_id="doc2",
+            workspace_id="workspace-1",
             content="beta",
             start_char=0,
             end_char=4,

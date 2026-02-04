@@ -56,11 +56,44 @@ if [ "$ready" -ne 1 ]; then
   exit 1
 fi
 
-curl -fsS -X POST "http://$HOST:$PORT/ingest/demo" >/dev/null
+auth_payload='{"email":"demo@local","password":"change-me-now"}'
 
-response="$(curl -fsS -X POST "http://$HOST:$PORT/query" \
+auth_response="$(curl -fsS -X POST "http://$HOST:$PORT/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{"question": "Che cos’è SPID e a cosa serve?", "top_k": 3}')"
+  -d "$auth_payload" || true)"
+
+if [ -z "$auth_response" ]; then
+  auth_response="$(curl -fsS -X POST "http://$HOST:$PORT/auth/login" \
+    -H "Content-Type: application/json" \
+    -d "$auth_payload")"
+fi
+
+if [ -z "$auth_response" ]; then
+  echo "Auth failed."
+  exit 1
+fi
+
+token="$(printf '%s' "$auth_response" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
+workspace_id="$(printf '%s' "$auth_response" | python -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("default_workspace") or {}; print(ws.get("id",""))')"
+
+if [ -z "$workspace_id" ]; then
+  workspace_id="$(curl -fsS "http://$HOST:$PORT/workspaces" \
+    -H "Authorization: Bearer $token" | \
+    python -c 'import json,sys; data=json.load(sys.stdin); print(data[0]["id"] if data else "")')"
+fi
+
+if [ -z "$workspace_id" ]; then
+  echo "Workspace not found."
+  exit 1
+fi
+
+curl -fsS -X POST "http://$HOST:$PORT/workspaces/$workspace_id/ingest/demo" \
+  -H "Authorization: Bearer $token" >/dev/null
+
+response="$(curl -fsS -X POST "http://$HOST:$PORT/workspaces/$workspace_id/query" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $token" \
+  -d "{\"question\": \"Che cos’è SPID e a cosa serve?\", \"top_k\": 3}")"
 
 if [ -z "$response" ]; then
   echo "Empty response from /query"

@@ -17,7 +17,8 @@ def test_parse_wikipedia_file(tmp_path: Path) -> None:
     path = tmp_path / "doc.txt"
     path.write_text(sample, encoding="utf-8")
 
-    doc = parse_wikipedia_file(path)
+    doc = parse_wikipedia_file(path, workspace_id="workspace-1")
+    assert doc.workspace_id == "workspace-1"
     assert doc.title == "Esempio"
     assert doc.source_url == "https://example.org"
     assert doc.license == "CC BY-SA 4.0"
@@ -28,6 +29,7 @@ def test_parse_wikipedia_file(tmp_path: Path) -> None:
 def test_chunk_document_creates_chunks() -> None:
     doc_text = "Parola " * 200
     doc = Document(
+        workspace_id="workspace-1",
         title="Documento",
         source_url=None,
         license=None,
