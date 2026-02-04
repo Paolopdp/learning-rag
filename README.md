@@ -18,6 +18,7 @@ Local-first, open-source RAG system focused on **secure-by-default** AI applicat
 - Python 3.13
 - `uv` package manager
 - Optional for local LLM: C/C++ toolchain + CMake (for `llama-cpp-python`)
+- For Postgres storage: Docker (or a local Postgres 16 + pgvector)
 
 ## Quickstart (Backend)
 ```bash
@@ -26,6 +27,38 @@ uv venv --python 3.13
 source .venv/bin/activate
 uv pip install -e ".[dev]"
 uvicorn app.main:app --reload
+```
+
+## Postgres + pgvector (Optional but Recommended)
+Start the database:
+```bash
+docker compose up -d db
+```
+
+Run migrations:
+```bash
+cd backend
+uv venv --python 3.13
+source .venv/bin/activate
+uv pip install -e ".[dev]"
+alembic upgrade head
+```
+
+Enable Postgres storage:
+```bash
+export RAG_STORE=postgres
+export RAG_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag
+uvicorn app.main:app --reload
+```
+
+Smoke test script:
+```bash
+./scripts/smoke_postgres.sh
+```
+
+To reset the DB before the smoke test:
+```bash
+SMOKE_DB_RESET=1 ./scripts/smoke_postgres.sh
 ```
 
 ## Demo: Ingest + Query

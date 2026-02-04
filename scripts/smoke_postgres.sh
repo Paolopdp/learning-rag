@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+BACKEND_DIR="$ROOT_DIR/backend"
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required but not installed."
+  exit 1
+fi
+
+cd "$BACKEND_DIR"
+
+if [ ! -d .venv ]; then
+  uv venv --python 3.13
+fi
+
+# shellcheck disable=SC1091
+source .venv/bin/activate
+
+if [ "${SMOKE_DB_RESET:-0}" = "1" ]; then
+  docker compose down
+fi
+
+docker compose up -d db
+
+uv pip install -e ".[dev]"
+
+alembic upgrade head
+
+export RAG_STORE=postgres
+export RAG_DATABASE_URL="${RAG_DATABASE_URL:-postgresql+psycopg://rag:rag@localhost:5432/rag}"
+
+HOST="${RAG_HOST:-127.0.0.1}"
+PORT="${RAG_PORT:-8000}"
+
+uvicorn app.main:app --host "$HOST" --port "$PORT" &
+API_PID=$!
+
+cleanup() {
+  kill "$API_PID" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+ready=0
+for _ in $(seq 1 20); do
+  if curl -fsS "http://$HOST:$PORT/health" >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 0.5
+done
+
+if [ "$ready" -ne 1 ]; then
+  echo "API did not become ready."
+  exit 1
+fi
+
+curl -fsS -X POST "http://$HOST:$PORT/ingest/demo" >/dev/null
+
+response="$(curl -fsS -X POST "http://$HOST:$PORT/query" \
+  -H "Content-Type: application/json" \
+  -d '{"question": "Che cos’è SPID e a cosa serve?", "top_k": 3}')"
+
+if [ -z "$response" ]; then
+  echo "Empty response from /query"
+  exit 1
+fi
+
+printf '%s' "$response" | python -c 'import json,sys; payload=json.load(sys.stdin); \
+assert payload.get("answer"), "Missing answer"; \
+assert payload.get("citations"), "Missing citations"; \
+print("OK: answer + citations returned")'

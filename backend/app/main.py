@@ -5,13 +5,11 @@ from app.config import wikipedia_it_dir
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
-from app.retrieval import top_k_chunks
-from app.store import InMemoryChunkStore
+from app.store import get_chunk_store
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
 
-# In-memory store is sufficient for the first slice; will be replaced by DB.
-chunk_store = InMemoryChunkStore()
+chunk_store = get_chunk_store()
 
 
 @app.get("/health")
@@ -25,7 +23,7 @@ def ingest_demo() -> dict[str, int]:
     chunks = chunk_documents(documents)
     embeddings = embed_texts([chunk.content for chunk in chunks])
     chunk_store.clear()
-    chunk_store.add_many(chunks, embeddings)
+    chunk_store.add_many(documents, chunks, embeddings)
     return {"documents": len(documents), "chunks": len(chunks)}
 
 
@@ -65,16 +63,11 @@ class QueryResponse(BaseModel):
 
 @app.post("/query", response_model=QueryResponse)
 def query(request: QueryRequest) -> QueryResponse:
-    if not chunk_store.chunks:
+    if not chunk_store.all(limit=1):
         raise HTTPException(status_code=400, detail="No data ingested yet.")
 
     query_embedding = embed_text(request.question)
-    results = top_k_chunks(
-        chunk_store.chunks,
-        chunk_store.embedding_matrix(),
-        query_embedding,
-        top_k=request.top_k,
-    )
+    results = chunk_store.search(query_embedding, top_k=request.top_k)
 
     if not results:
         return QueryResponse(answer="Nessun risultato.", citations=[])
