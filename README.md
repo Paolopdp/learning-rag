@@ -6,9 +6,9 @@
 Local-first, open-source RAG system focused on **secure-by-default** AI application engineering. This repo is intentionally learning-first, built in small vertical slices with KISS/Clean Code/TDD where applicable.
 
 ## Status
-- Backend MVP skeleton is live.
-- First vertical slice: ingest -> chunk -> embed -> retrieve -> answer with citations (no auth yet).
-- Frontend is not implemented yet.
+- Backend MVP skeleton is live (auth + workspaces + citations).
+- First vertical slice: ingest -> chunk -> embed -> retrieve -> answer with citations.
+- Minimal frontend UI is available (auth, ingest/query, citations, audit log).
 
 ## Repo Layout
 - `backend/` FastAPI service (current focus)
@@ -24,6 +24,12 @@ Local-first, open-source RAG system focused on **secure-by-default** AI applicat
 - For Postgres storage: Docker (or a local Postgres 16 + pgvector)
 
 ## Quickstart (Backend)
+Preferred (scripted, uses Postgres so audit logging works):
+```bash
+./scripts/launch_backend.sh
+```
+
+Manual (equivalent):
 ```bash
 cd backend
 uv venv --python 3.13
@@ -33,12 +39,12 @@ uvicorn app.main:app --reload
 ```
 
 ## Postgres + pgvector (Optional but Recommended)
-Start the database:
+Start the database (if not using the script):
 ```bash
 docker compose up -d db
 ```
 
-Run migrations:
+Run migrations (if not using the script):
 ```bash
 cd backend
 uv venv --python 3.13
@@ -47,7 +53,7 @@ uv pip install -e ".[dev]"
 alembic upgrade head
 ```
 
-Enable Postgres storage:
+Enable Postgres storage (required for audit logging):
 ```bash
 export RAG_STORE=postgres
 export RAG_DATABASE_URL=postgresql+psycopg://rag:rag@localhost:5432/rag
@@ -85,6 +91,10 @@ curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/query \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer TOKEN" \
   -d '{"question": "Che cos’è SPID e a cosa serve?", "top_k": 3}'
+
+# Audit log (requires Postgres storage)
+curl -H "Authorization: Bearer TOKEN" \
+  http://127.0.0.1:8000/workspaces/WORKSPACE_ID/audit?limit=20
 
 # List workspaces
 curl -H "Authorization: Bearer TOKEN" http://127.0.0.1:8000/workspaces
@@ -153,6 +163,12 @@ The CI pipeline runs:
 - `syft` (SBOM generation)
 
 ## Tests
+Preferred (scripted):
+```bash
+./scripts/launch_backend_tests.sh
+```
+
+Manual:
 ```bash
 cd backend
 uv venv --python 3.13
@@ -167,10 +183,10 @@ pytest
 - Golden queries: `data/golden_queries.md`
 
 ## Roadmap (Short)
-- Retrieval integration test using golden queries.
-- Add auth + workspaces.
-- Observability + audit logging.
-- Security/eval tooling in CI.
+- Add document inventory + classification labels.
+- Expand audit log UI and governance views.
+- Add basic workspace member management UI.
+- Extend security/eval tooling in CI.
 
 ## Notes
 - This is a portfolio project: we prioritize clarity, security, and reproducibility over shortcuts.

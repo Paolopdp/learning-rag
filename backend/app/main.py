@@ -4,14 +4,16 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
+from app.audit import audit_enabled, list_events, log_event
 from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
-from app.config import cors_origins, wikipedia_it_dir
+from app.config import auth_disabled, cors_origins, wikipedia_it_dir
 from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
 from app.schemas import (
+    AuditEvent,
     AuthResponse,
     IngestResponse,
     LoginRequest,
@@ -161,6 +163,17 @@ def ingest_demo(
     embeddings = embed_texts([chunk.content for chunk in chunks])
     chunk_store.clear_workspace(workspace_id)
     chunk_store.add_many(documents, chunks, embeddings)
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="ingest_demo",
+        payload={
+            "documents": len(documents),
+            "chunks": len(chunks),
+            "sample_titles": [doc.title for doc in documents[:3]],
+            "source": "wikipedia_it",
+        },
+    )
     return IngestResponse(documents=len(documents), chunks=len(chunks))
 
 
@@ -192,6 +205,19 @@ def query(
     else:
         answer = top_chunks[0].content
 
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="query",
+        payload={
+            "question": request.question,
+            "top_k": request.top_k,
+            "results": len(results),
+            "top_sources": [result.chunk.source_title for result in results],
+            "llm_used": llm_enabled(),
+        },
+    )
+
     citations = [
         {
             "chunk_id": result.chunk.chunk_id,
@@ -203,3 +229,32 @@ def query(
         for result in results
     ]
     return QueryResponse(answer=answer, citations=citations)
+
+
+@app.get("/workspaces/{workspace_id}/audit", response_model=list[AuditEvent])
+def audit_log(
+    workspace_id: str,
+    limit: int = 50,
+    current_user: UserContext = Depends(get_current_user),
+) -> list[AuditEvent]:
+    require_workspace_role(workspace_id, current_user)
+
+    if not audit_enabled():
+        return []
+
+    try:
+        events = list_events(workspace_id, limit=limit)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return [
+        AuditEvent(
+            id=str(event.id),
+            workspace_id=str(event.workspace_id),
+            user_id=str(event.user_id) if event.user_id else None,
+            action=event.action,
+            payload=event.payload,
+            created_at=event.created_at,
+        )
+        for event in events
+    ]

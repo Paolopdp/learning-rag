@@ -29,6 +29,15 @@ type QueryResponse = {
   citations: Citation[];
 };
 
+type AuditEvent = {
+  id: string;
+  workspace_id: string;
+  user_id: string | null;
+  action: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 type AuthResponse = {
   access_token: string;
   token_type: string;
@@ -62,10 +71,15 @@ export default function Home() {
   const [ingestInfo, setIngestInfo] = useState<IngestResponse | null>(null);
   const [answer, setAnswer] = useState<string>("");
   const [citations, setCitations] = useState<Citation[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [busyIngest, setBusyIngest] = useState(false);
   const [busyQuery, setBusyQuery] = useState(false);
   const [busyAuth, setBusyAuth] = useState(false);
+  const [busyAudit, setBusyAudit] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const formatAuditTimestamp = (value: string) =>
+    new Date(value).toLocaleString();
 
   const isReady = useMemo(
     () => Boolean(ingestInfo && ingestInfo.chunks > 0),
@@ -83,7 +97,39 @@ export default function Home() {
     }
     const payload = (await response.json()) as Workspace[];
     setWorkspaces(payload);
-    setWorkspace(payload[0] ?? null);
+    const selected = payload[0] ?? null;
+    setWorkspace(selected);
+    return selected;
+  };
+
+  const loadAudit = async (
+    accessToken: string | null = token,
+    workspaceId: string | null = workspace?.id ?? null
+  ) => {
+    if (!accessToken || !workspaceId) {
+      setAuditEvents([]);
+      return;
+    }
+    setBusyAudit(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspaceId}/audit?limit=20`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Audit log request failed.");
+      }
+      const payload = (await response.json()) as AuditEvent[];
+      setAuditEvents(payload);
+    } catch (err) {
+      setAuditEvents([]);
+      setError(err instanceof Error ? err.message : "Audit log request failed.");
+    } finally {
+      setBusyAudit(false);
+    }
   };
 
   const handleRegister = async () => {
@@ -106,6 +152,10 @@ export default function Home() {
       setIngestInfo(null);
       setAnswer("");
       setCitations([]);
+      setAuditEvents([]);
+      if (payload.default_workspace) {
+        await loadAudit(payload.access_token, payload.default_workspace.id);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
     } finally {
@@ -128,11 +178,14 @@ export default function Home() {
       }
       const payload = (await response.json()) as AuthResponse;
       setToken(payload.access_token);
+      setAuditEvents([]);
       if (payload.default_workspace) {
         setWorkspace(payload.default_workspace);
         setWorkspaces([payload.default_workspace]);
+        await loadAudit(payload.access_token, payload.default_workspace.id);
       } else {
-        await fetchWorkspaces(payload.access_token);
+        const selected = await fetchWorkspaces(payload.access_token);
+        await loadAudit(payload.access_token, selected?.id ?? null);
       }
       setIngestInfo(null);
       setAnswer("");
@@ -165,6 +218,7 @@ export default function Home() {
       }
       const payload = (await response.json()) as IngestResponse;
       setIngestInfo(payload);
+      await loadAudit(token, workspace.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ingest failed.");
     } finally {
@@ -201,6 +255,7 @@ export default function Home() {
       const payload = (await response.json()) as QueryResponse;
       setAnswer(payload.answer);
       setCitations(payload.citations);
+      await loadAudit(token, workspace.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Query failed.");
     } finally {
@@ -437,6 +492,51 @@ export default function Home() {
                             Source
                           </a>
                         ) : null}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-[color:var(--border)] bg-white px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                    Audit Log
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => loadAudit()}
+                    disabled={!canUseApi || busyAudit}
+                    className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyAudit ? "Loading..." : "Refresh"}
+                  </button>
+                </div>
+                {auditEvents.length === 0 ? (
+                  <p className="mt-3 text-sm text-[color:var(--muted)]">
+                    No audit events yet. Ingest or query to generate entries.
+                  </p>
+                ) : (
+                  <div className="mt-3 grid gap-3">
+                    {auditEvents.map((event) => (
+                      <div
+                        key={event.id}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-[color:var(--foreground)]">
+                            {event.action}
+                          </span>
+                          <span className="text-xs text-[color:var(--muted)]">
+                            {formatAuditTimestamp(event.created_at)}
+                          </span>
+                        </div>
+                        <div className="mt-2 text-xs text-[color:var(--muted)]">
+                          User: {event.user_id ?? "system"}
+                        </div>
+                        <pre className="mt-2 whitespace-pre-wrap text-[12px] text-[color:var(--muted)]">
+                          {JSON.stringify(event.payload, null, 2)}
+                        </pre>
                       </div>
                     ))}
                   </div>

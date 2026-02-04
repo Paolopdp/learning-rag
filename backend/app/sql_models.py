@@ -7,6 +7,7 @@ from pgvector.sqlalchemy import Vector
 from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from app.config import embedding_dim
 
@@ -101,3 +102,18 @@ class WorkspaceMemberORM(Base):
 
     user: Mapped[UserORM] = relationship(back_populates="memberships")
     workspace: Mapped[WorkspaceORM] = relationship(back_populates="members")
+
+
+class AuditLogORM(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    action: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
