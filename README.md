@@ -1,5 +1,8 @@
 # RAG Assistant (Governance & Security by Design)
 
+[![CI](https://github.com/Paolopdp/learning-rag/actions/workflows/ci.yml/badge.svg)](https://github.com/Paolopdp/learning-rag/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/Paolopdp/learning-rag/actions/workflows/codeql.yml/badge.svg)](https://github.com/Paolopdp/learning-rag/actions/workflows/codeql.yml)
+
 Local-first, open-source RAG system focused on **secure-by-default** AI application engineering. This repo is intentionally learning-first, built in small vertical slices with KISS/Clean Code/TDD where applicable.
 
 ## Status
@@ -141,6 +144,13 @@ Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)
 - `RAG_AUTH_DISABLED=1` to bypass auth (tests/dev only)
 - `RAG_CORS_ORIGINS` to override allowed origins (comma-separated)
+
+## CI Security Checks
+The CI pipeline runs:
+- `gitleaks` (secret scanning)
+- `osv-scanner` (dependency vulnerabilities)
+- `trivy` (filesystem scan)
+- `syft` (SBOM generation)
 
 ## Tests
 ```bash
