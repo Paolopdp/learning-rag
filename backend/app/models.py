@@ -13,6 +13,7 @@ class Document:
     license: str | None
     accessed_at: date | None
     text: str
+    classification_label: str = "internal"
     document_id: str = field(default_factory=lambda: str(uuid4()))
 
 

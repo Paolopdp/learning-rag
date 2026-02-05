@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import uuid
 
 import numpy as np
@@ -15,16 +15,23 @@ from app.sql_models import ChunkORM, DocumentORM
 
 @dataclass
 class InMemoryChunkStore:
+    documents: list[Document] = field(default_factory=list)
     chunks: list[Chunk] = field(default_factory=list)
     embeddings: list[list[float]] = field(default_factory=list)
 
     def clear(self) -> None:
+        self.documents.clear()
         self.chunks.clear()
         self.embeddings.clear()
 
     def clear_workspace(self, workspace_id: str) -> None:
         if not workspace_id:
             return
+        self.documents = [
+            document
+            for document in self.documents
+            if document.workspace_id != workspace_id
+        ]
         filtered_chunks: list[Chunk] = []
         filtered_embeddings: list[list[float]] = []
         for chunk, embedding in zip(self.chunks, self.embeddings):
@@ -45,10 +52,40 @@ class InMemoryChunkStore:
         for doc in documents:
             if not doc.workspace_id:
                 raise ValueError("Document is missing workspace_id.")
+        existing_ids = {document.document_id for document in documents}
+        self.documents = [
+            document
+            for document in self.documents
+            if document.document_id not in existing_ids
+        ]
+        self.documents.extend(documents)
         self.chunks.extend(new_chunks)
         if len(new_chunks) == 0:
             return
         self.embeddings.extend([embedding.tolist() for embedding in new_embeddings])
+
+    def list_documents(self, workspace_id: str) -> list[Document]:
+        return [
+            document
+            for document in self.documents
+            if document.workspace_id == workspace_id
+        ]
+
+    def update_document_classification(
+        self,
+        workspace_id: str,
+        document_id: str,
+        classification_label: str,
+    ) -> Document | None:
+        for index, document in enumerate(self.documents):
+            if (
+                document.workspace_id == workspace_id
+                and document.document_id == document_id
+            ):
+                updated = replace(document, classification_label=classification_label)
+                self.documents[index] = updated
+                return updated
+        return None
 
     def all(self, limit: int | None = None) -> list[Chunk]:
         if limit is None:
@@ -131,6 +168,7 @@ class PostgresChunkStore:
                     license=doc.license,
                     accessed_at=doc.accessed_at,
                     text=doc.text,
+                    classification_label=doc.classification_label,
                 )
             session.add_all(doc_map.values())
             session.flush()
@@ -153,6 +191,35 @@ class PostgresChunkStore:
                     )
                 )
             session.commit()
+
+    def list_documents(self, workspace_id: str) -> list[Document]:
+        with SessionLocal() as session:
+            rows = session.execute(
+                select(DocumentORM)
+                .where(DocumentORM.workspace_id == uuid.UUID(workspace_id))
+                .order_by(DocumentORM.created_at.desc())
+            ).scalars().all()
+            return [self._to_document(row) for row in rows]
+
+    def update_document_classification(
+        self,
+        workspace_id: str,
+        document_id: str,
+        classification_label: str,
+    ) -> Document | None:
+        with SessionLocal() as session:
+            row = session.execute(
+                select(DocumentORM).where(
+                    DocumentORM.workspace_id == uuid.UUID(workspace_id),
+                    DocumentORM.id == uuid.UUID(document_id),
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            row.classification_label = classification_label
+            session.commit()
+            session.refresh(row)
+            return self._to_document(row)
 
     def all(self, limit: int | None = None) -> list[Chunk]:
         with SessionLocal() as session:
@@ -209,6 +276,19 @@ class PostgresChunkStore:
             source_title=row.source_title,
             source_url=row.source_url,
             chunk_id=str(row.id),
+        )
+
+    @staticmethod
+    def _to_document(row: DocumentORM) -> Document:
+        return Document(
+            document_id=str(row.id),
+            workspace_id=str(row.workspace_id),
+            title=row.title,
+            source_url=row.source_url,
+            license=row.license,
+            accessed_at=row.accessed_at,
+            text=row.text,
+            classification_label=row.classification_label,
         )
 
 

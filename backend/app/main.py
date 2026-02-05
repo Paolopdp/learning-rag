@@ -15,6 +15,8 @@ from app.observability import configure_otel
 from app.schemas import (
     AuditEvent,
     AuthResponse,
+    DocumentClassificationUpdateRequest,
+    DocumentInventoryItem,
     IngestResponse,
     LoginRequest,
     QueryRequest,
@@ -51,6 +53,24 @@ def require_workspace_uuid(workspace_id: str) -> uuid.UUID:
         return uuid.UUID(workspace_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid workspace id.") from exc
+
+
+def require_document_uuid(document_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(document_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid document id.") from exc
+
+
+def to_document_inventory_item(document) -> DocumentInventoryItem:
+    return DocumentInventoryItem(
+        id=document.document_id,
+        title=document.title,
+        source_url=document.source_url,
+        license=document.license,
+        accessed_at=document.accessed_at,
+        classification_label=document.classification_label,
+    )
 
 
 @app.post("/auth/register", response_model=AuthResponse)
@@ -260,6 +280,50 @@ def query(
         for result in results
     ]
     return QueryResponse(answer=answer, citations=citations)
+
+
+@app.get("/workspaces/{workspace_id}/documents", response_model=list[DocumentInventoryItem])
+def list_documents(
+    workspace_id: str,
+    current_user: UserContext = Depends(get_current_user),
+) -> list[DocumentInventoryItem]:
+    require_workspace_uuid(workspace_id)
+    require_workspace_role(workspace_id, current_user)
+
+    documents = chunk_store.list_documents(workspace_id)
+    return [to_document_inventory_item(document) for document in documents]
+
+
+@app.patch(
+    "/workspaces/{workspace_id}/documents/{document_id}/classification",
+    response_model=DocumentInventoryItem,
+)
+def update_document_classification(
+    workspace_id: str,
+    document_id: str,
+    payload: DocumentClassificationUpdateRequest,
+    current_user: UserContext = Depends(get_current_user),
+) -> DocumentInventoryItem:
+    require_workspace_uuid(workspace_id)
+    require_document_uuid(document_id)
+    require_workspace_role(workspace_id, current_user)
+
+    document = chunk_store.update_document_classification(
+        workspace_id, document_id, payload.classification_label
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="document_classification_update",
+        payload={
+            "document_id": document_id,
+            "classification_label": payload.classification_label,
+        },
+    )
+    return to_document_inventory_item(document)
 
 
 @app.get("/workspaces/{workspace_id}/audit", response_model=list[AuditEvent])

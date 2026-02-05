@@ -8,7 +8,7 @@ Local-first, open-source RAG system focused on **secure-by-default** AI applicat
 ## Status
 - Backend MVP skeleton is live (auth + workspaces + citations).
 - First vertical slice: ingest -> chunk -> embed -> retrieve -> answer with citations.
-- Minimal frontend UI is available (auth, ingest/query, citations, audit log).
+- Minimal frontend UI is available (auth, ingest/query, citations, audit log, document inventory).
 
 ## Repo Layout
 - `backend/` FastAPI service (current focus)
@@ -95,6 +95,16 @@ curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/query \
 # Audit log (requires Postgres storage)
 curl -H "Authorization: Bearer TOKEN" \
   http://127.0.0.1:8000/workspaces/WORKSPACE_ID/audit?limit=20
+
+# Document inventory
+curl -H "Authorization: Bearer TOKEN" \
+  http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents
+
+# Update document classification label
+curl -X PATCH http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents/DOCUMENT_ID/classification \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"classification_label":"confidential"}'
 
 # List workspaces
 curl -H "Authorization: Bearer TOKEN" http://127.0.0.1:8000/workspaces
@@ -189,7 +199,7 @@ pytest
 - Golden queries: `data/golden_queries.md`
 
 ## Roadmap (Short)
-- Add document inventory + classification labels.
+- Add policy checks tied to document classification labels.
 - Expand audit log UI and governance views.
 - Add basic workspace member management UI.
 - Extend security/eval tooling in CI.

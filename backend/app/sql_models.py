@@ -28,6 +28,7 @@ class DocumentORM(Base):
     license: Mapped[str | None] = mapped_column(Text, nullable=True)
     accessed_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
+    classification_label: Mapped[str] = mapped_column(String(32), nullable=False, default="internal")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
     workspace: Mapped["WorkspaceORM"] = relationship(back_populates="documents")

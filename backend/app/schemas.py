@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any
+from datetime import date, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -41,6 +41,22 @@ class WorkspaceCreateRequest(BaseModel):
 class IngestResponse(BaseModel):
     documents: int
     chunks: int
+
+
+ClassificationLabel = Literal["public", "internal", "confidential", "restricted"]
+
+
+class DocumentInventoryItem(BaseModel):
+    id: str
+    title: str
+    source_url: str | None
+    license: str | None
+    accessed_at: date | None
+    classification_label: ClassificationLabel
+
+
+class DocumentClassificationUpdateRequest(BaseModel):
+    classification_label: ClassificationLabel
 
 
 class QueryRequest(BaseModel):
