@@ -104,6 +104,7 @@ Sensitive keys (e.g., `question`, `content`) are redacted server-side.
 Auth events (register/login) are recorded with metadata only.
 Audit logging is best-effort and will not block core API operations if the DB is unavailable.
 Invalid workspace IDs return `400` before any processing.
+Governance reference: `docs/governance.md`.
 
 ## Frontend (Minimal UI)
 ```bash
