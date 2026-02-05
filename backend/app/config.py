@@ -55,3 +55,7 @@ def jwt_algorithm() -> str:
 
 def jwt_exp_minutes() -> int:
     return int(os.getenv("RAG_JWT_EXP_MINUTES", "60"))
+
+
+def system_workspace_id() -> str:
+    return "00000000-0000-0000-0000-000000000002"

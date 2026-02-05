@@ -104,3 +104,16 @@ printf '%s' "$response" | python -c 'import json,sys; payload=json.load(sys.stdi
 assert payload.get("answer"), "Missing answer"; \
 assert payload.get("citations"), "Missing citations"; \
 print("OK: answer + citations returned")'
+
+audit_response="$(curl -fsS "http://$HOST:$PORT/workspaces/$workspace_id/audit?limit=5" \
+  -H "Authorization: Bearer $token")"
+
+if [ -z "$audit_response" ]; then
+  echo "Empty response from /audit"
+  exit 1
+fi
+
+printf '%s' "$audit_response" | python -c 'import json,sys; payload=json.load(sys.stdin); \
+assert isinstance(payload, list), "Audit payload must be a list"; \
+assert len(payload) > 0, "Audit log is empty"; \
+print("OK: audit events returned")'

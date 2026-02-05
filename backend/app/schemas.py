@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -56,3 +59,12 @@ class Citation(BaseModel):
 class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
+
+
+class AuditEvent(BaseModel):
+    id: str
+    workspace_id: str
+    user_id: str | None
+    action: str
+    payload: dict[str, Any]
+    created_at: datetime

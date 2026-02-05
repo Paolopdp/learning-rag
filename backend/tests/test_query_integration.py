@@ -38,3 +38,8 @@ def test_query_returns_citations_for_golden_queries() -> None:
         assert payload["citations"]
         titles = {c["source_title"] for c in payload["citations"]}
         assert any(expected in titles for expected in expected_titles)
+
+    audit_response = client.get(f"/workspaces/{workspace_id}/audit")
+    assert audit_response.status_code == 200
+    audit_payload = audit_response.json()
+    assert isinstance(audit_payload, list)
