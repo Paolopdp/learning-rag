@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class RegisterRequest(BaseModel):
@@ -38,8 +38,25 @@ class WorkspaceMemberOut(BaseModel):
 
 
 class WorkspaceMemberAddRequest(BaseModel):
-    email: str = Field(min_length=3)
+    email: str = Field(min_length=3, max_length=255)
     role: WorkspaceRole = "member"
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip().lower()
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        local, sep, domain = value.partition("@")
+        if sep != "@" or not local or not domain:
+            raise ValueError("Invalid email format.")
+        if any(char.isspace() for char in value):
+            raise ValueError("Invalid email format.")
+        return value
 
 
 class WorkspaceMemberRoleUpdateRequest(BaseModel):
