@@ -27,6 +27,25 @@ class WorkspaceOut(BaseModel):
     role: str
 
 
+WorkspaceRole = Literal["admin", "member"]
+
+
+class WorkspaceMemberOut(BaseModel):
+    user_id: str
+    email: str
+    role: WorkspaceRole
+    created_at: datetime
+
+
+class WorkspaceMemberAddRequest(BaseModel):
+    email: str = Field(min_length=3)
+    role: WorkspaceRole = "member"
+
+
+class WorkspaceMemberRoleUpdateRequest(BaseModel):
+    role: WorkspaceRole
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"

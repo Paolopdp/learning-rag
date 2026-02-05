@@ -6,6 +6,7 @@ This project includes a minimal governance baseline focused on traceability and 
 - Event metadata for key actions (`auth_register`, `auth_login`, `ingest_demo`, `query`).
 - Actor and scope fields (`user_id`, `workspace_id`) when available.
 - Event timestamp (`created_at`) and structured payload (`payload`).
+- Action outcome (`payload.outcome`) with values `success` or `failure`.
 
 ## What is not logged
 - Raw prompts or full document text.
@@ -18,11 +19,18 @@ This project includes a minimal governance baseline focused on traceability and 
 - Pagination: currently limit-only (bounded server-side).
 
 ## Classification labels
-- Document inventory endpoint: `GET /workspaces/{workspace_id}/documents`
+- Document inventory endpoint: `GET /workspaces/{workspace_id}/documents?limit=50&offset=0`
 - Classification update endpoint:
   `PATCH /workspaces/{workspace_id}/documents/{document_id}/classification`
 - Allowed labels: `public`, `internal`, `confidential`, `restricted`
 - Default label at ingestion: `internal`
+
+## Workspace member management
+- Members endpoint: `GET /workspaces/{workspace_id}/members`
+- Add member endpoint: `POST /workspaces/{workspace_id}/members` (admin only)
+- Role update endpoint: `PATCH /workspaces/{workspace_id}/members/{user_id}/role` (admin only)
+- Remove member endpoint: `DELETE /workspaces/{workspace_id}/members/{user_id}` (admin only)
+- Safety rule: the last workspace admin cannot be demoted or removed.
 
 ## Storage and index
 - Audit logs are stored only when `RAG_STORE=postgres`.
@@ -55,4 +63,13 @@ curl -X PATCH \
   -H "Authorization: Bearer TOKEN" \
   -d '{"classification_label":"restricted"}' \
   "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents/DOCUMENT_ID/classification"
+
+# List and manage workspace members
+curl -H "Authorization: Bearer TOKEN" \
+  "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members"
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"email":"member@local","role":"member"}' \
+  "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members"
 ```

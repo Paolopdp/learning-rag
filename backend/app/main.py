@@ -1,8 +1,8 @@
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.audit import audit_enabled, list_events, log_event
 from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
@@ -23,6 +23,9 @@ from app.schemas import (
     QueryResponse,
     RegisterRequest,
     WorkspaceCreateRequest,
+    WorkspaceMemberAddRequest,
+    WorkspaceMemberOut,
+    WorkspaceMemberRoleUpdateRequest,
     WorkspaceOut,
 )
 from app.sql_models import UserORM, WorkspaceMemberORM, WorkspaceORM
@@ -65,6 +68,13 @@ def require_document_uuid(document_id: str) -> uuid.UUID:
         raise HTTPException(status_code=400, detail="Invalid document id.") from exc
 
 
+def require_user_uuid(user_id: str) -> uuid.UUID:
+    try:
+        return uuid.UUID(user_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid user id.") from exc
+
+
 def to_document_inventory_item(document) -> DocumentInventoryItem:
     return DocumentInventoryItem(
         id=document.document_id,
@@ -73,6 +83,27 @@ def to_document_inventory_item(document) -> DocumentInventoryItem:
         license=document.license,
         accessed_at=document.accessed_at,
         classification_label=document.classification_label,
+    )
+
+
+def count_workspace_admins(session, workspace_uuid: uuid.UUID) -> int:
+    stmt = (
+        select(func.count())
+        .select_from(WorkspaceMemberORM)
+        .where(
+            WorkspaceMemberORM.workspace_id == workspace_uuid,
+            WorkspaceMemberORM.role == "admin",
+        )
+    )
+    return int(session.execute(stmt).scalar_one())
+
+
+def to_workspace_member_out(member: WorkspaceMemberORM, user: UserORM) -> WorkspaceMemberOut:
+    return WorkspaceMemberOut(
+        user_id=str(member.user_id),
+        email=user.email,
+        role=member.role,
+        created_at=member.created_at,
     )
 
 
@@ -204,6 +235,181 @@ def create_workspace(
         session.commit()
 
         return WorkspaceOut(id=str(workspace.id), name=workspace.name, role="admin")
+
+
+@app.get("/workspaces/{workspace_id}/members", response_model=list[WorkspaceMemberOut])
+def list_workspace_members(
+    workspace_id: str,
+    current_user: UserContext = Depends(get_current_user),
+) -> list[WorkspaceMemberOut]:
+    workspace_uuid = require_workspace_uuid(workspace_id)
+    require_workspace_role(workspace_id, current_user)
+
+    with SessionLocal() as session:
+        memberships = session.execute(
+            select(WorkspaceMemberORM)
+            .where(WorkspaceMemberORM.workspace_id == workspace_uuid)
+            .order_by(WorkspaceMemberORM.created_at.asc())
+        ).scalars().all()
+
+        output: list[WorkspaceMemberOut] = []
+        for membership in memberships:
+            user = session.get(UserORM, membership.user_id)
+            if user is None:
+                continue
+            output.append(to_workspace_member_out(membership, user))
+        return output
+
+
+@app.post("/workspaces/{workspace_id}/members", response_model=WorkspaceMemberOut)
+def add_workspace_member(
+    workspace_id: str,
+    payload: WorkspaceMemberAddRequest,
+    current_user: UserContext = Depends(get_current_user),
+) -> WorkspaceMemberOut:
+    workspace_uuid = require_workspace_uuid(workspace_id)
+    require_workspace_role(workspace_id, current_user, role="admin")
+
+    with SessionLocal() as session:
+        user = session.execute(
+            select(UserORM).where(UserORM.email == payload.email)
+        ).scalar_one_or_none()
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+
+        existing = session.get(
+            WorkspaceMemberORM,
+            {
+                "workspace_id": workspace_uuid,
+                "user_id": user.id,
+            },
+        )
+        if existing is not None:
+            raise HTTPException(status_code=400, detail="User is already a workspace member.")
+
+        membership = WorkspaceMemberORM(
+            workspace_id=workspace_uuid,
+            user_id=user.id,
+            role=payload.role,
+        )
+        session.add(membership)
+        session.commit()
+        session.refresh(membership)
+        target_user_id = str(user.id)
+        target_user_email = user.email
+        result = to_workspace_member_out(membership, user)
+
+    domain = target_user_email.split("@")[-1] if "@" in target_user_email else "unknown"
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="workspace_member_add",
+        payload={
+            "target_user_id": target_user_id,
+            "role": payload.role,
+            "target_email_domain": domain,
+        },
+    )
+    return result
+
+
+@app.patch(
+    "/workspaces/{workspace_id}/members/{user_id}/role",
+    response_model=WorkspaceMemberOut,
+)
+def update_workspace_member_role(
+    workspace_id: str,
+    user_id: str,
+    payload: WorkspaceMemberRoleUpdateRequest,
+    current_user: UserContext = Depends(get_current_user),
+) -> WorkspaceMemberOut:
+    workspace_uuid = require_workspace_uuid(workspace_id)
+    user_uuid = require_user_uuid(user_id)
+    require_workspace_role(workspace_id, current_user, role="admin")
+
+    with SessionLocal() as session:
+        membership = session.get(
+            WorkspaceMemberORM,
+            {
+                "workspace_id": workspace_uuid,
+                "user_id": user_uuid,
+            },
+        )
+        if membership is None:
+            raise HTTPException(status_code=404, detail="Workspace member not found.")
+
+        old_role = membership.role
+        if old_role == "admin" and payload.role != "admin":
+            if count_workspace_admins(session, workspace_uuid) <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot demote the last workspace admin.",
+                )
+
+        membership.role = payload.role
+        session.commit()
+        session.refresh(membership)
+
+        user = session.get(UserORM, user_uuid)
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found.")
+        result = to_workspace_member_out(membership, user)
+
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="workspace_member_role_update",
+        payload={
+            "target_user_id": user_id,
+            "old_role": old_role,
+            "new_role": payload.role,
+        },
+    )
+    return result
+
+
+@app.delete("/workspaces/{workspace_id}/members/{user_id}", status_code=204)
+def remove_workspace_member(
+    workspace_id: str,
+    user_id: str,
+    current_user: UserContext = Depends(get_current_user),
+) -> Response:
+    workspace_uuid = require_workspace_uuid(workspace_id)
+    user_uuid = require_user_uuid(user_id)
+    require_workspace_role(workspace_id, current_user, role="admin")
+
+    with SessionLocal() as session:
+        membership = session.get(
+            WorkspaceMemberORM,
+            {
+                "workspace_id": workspace_uuid,
+                "user_id": user_uuid,
+            },
+        )
+        if membership is None:
+            raise HTTPException(status_code=404, detail="Workspace member not found.")
+
+        removed_role = membership.role
+        if removed_role == "admin":
+            if count_workspace_admins(session, workspace_uuid) <= 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot remove the last workspace admin.",
+                )
+
+        session.delete(membership)
+        session.commit()
+
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="workspace_member_remove",
+        payload={
+            "target_user_id": user_id,
+            "removed_role": removed_role,
+        },
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.post("/workspaces/{workspace_id}/ingest/demo", response_model=IngestResponse)
