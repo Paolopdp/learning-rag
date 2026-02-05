@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.auth import UserContext
 from app.main import (
@@ -14,7 +15,7 @@ from app.main import (
     update_workspace_member_role,
 )
 from app.schemas import WorkspaceMemberAddRequest, WorkspaceMemberRoleUpdateRequest
-from app.sql_models import UserORM, WorkspaceMemberORM
+from app.sql_models import UserORM, WorkspaceMemberORM, WorkspaceORM
 
 
 class _ScalarOneResult:
@@ -45,14 +46,18 @@ class _ExecuteResult:
     def __init__(self, values):
         self._values = values
 
+    def all(self):
+        return self._values
+
     def scalars(self):
         return _ScalarsResult(self._values)
 
 
 class _FakeSession:
-    def __init__(self, users, memberships):
+    def __init__(self, users, memberships, workspaces):
         self.users = users
         self.memberships = memberships
+        self.workspaces = workspaces
 
     def __enter__(self):
         return self
@@ -69,17 +74,22 @@ class _FakeSession:
             user = next((value for value in self.users.values() if value.email == email), None)
             return _ScalarOneOrNoneResult(user)
 
-        if "FROM workspace_members" in sql and "ORDER BY workspace_members.created_at ASC" in sql:
+        if (
+            "FROM workspace_members" in sql
+            and "JOIN users" in sql
+            and "ORDER BY workspace_members.created_at ASC" in sql
+        ):
             workspace_id = next(
                 (value for value in params.values() if isinstance(value, uuid.UUID)),
                 None,
             )
             rows = [
-                membership
+                (membership, self.users.get(user_id))
                 for (ws_id, _), membership in self.memberships.items()
+                for user_id in [membership.user_id]
                 if ws_id == workspace_id
             ]
-            rows.sort(key=lambda row: row.created_at)
+            rows.sort(key=lambda row: row[0].created_at)
             return _ExecuteResult(rows)
 
         if "count(" in sql and "workspace_members.role" in sql:
@@ -100,6 +110,8 @@ class _FakeSession:
     def get(self, model, key):
         if model is UserORM:
             return self.users.get(key)
+        if model is WorkspaceORM:
+            return self.workspaces.get(key)
         if model is WorkspaceMemberORM:
             if isinstance(key, dict):
                 return self.memberships.get((key["workspace_id"], key["user_id"]))
@@ -129,12 +141,13 @@ class _FakeSession:
 
 
 class _FakeSessionLocal:
-    def __init__(self, users, memberships):
+    def __init__(self, users, memberships, workspaces):
         self.users = users
         self.memberships = memberships
+        self.workspaces = workspaces
 
     def __call__(self):
-        return _FakeSession(self.users, self.memberships)
+        return _FakeSession(self.users, self.memberships, self.workspaces)
 
 
 def _build_user(user_id: uuid.UUID, email: str) -> UserORM:
@@ -157,6 +170,12 @@ def _build_membership(
     return membership
 
 
+def _build_workspace(workspace_id: uuid.UUID, name: str = "Workspace") -> WorkspaceORM:
+    workspace = WorkspaceORM(name=name)
+    workspace.id = workspace_id
+    return workspace
+
+
 def _setup_members_env(monkeypatch: pytest.MonkeyPatch):
     from app import main
 
@@ -171,8 +190,11 @@ def _setup_members_env(monkeypatch: pytest.MonkeyPatch):
     memberships = {
         (workspace_id, admin_id): _build_membership(workspace_id, admin_id, "admin"),
     }
+    workspaces = {
+        workspace_id: _build_workspace(workspace_id),
+    }
 
-    monkeypatch.setattr(main, "SessionLocal", _FakeSessionLocal(users, memberships))
+    monkeypatch.setattr(main, "SessionLocal", _FakeSessionLocal(users, memberships, workspaces))
     monkeypatch.setattr(main, "require_workspace_role", lambda *args, **kwargs: "admin")
 
     events = []
@@ -184,6 +206,7 @@ def _setup_members_env(monkeypatch: pytest.MonkeyPatch):
         "admin_id": admin_id,
         "member_id": member_id,
         "memberships": memberships,
+        "workspaces": workspaces,
         "events": events,
         "current_user": current_user,
     }
@@ -206,8 +229,13 @@ def test_add_workspace_member_and_list(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     assert len(members) == 2
     assert {member.email for member in members} == {"admin@local", "member@local"}
-
-    assert ctx["events"][-1]["action"] == "workspace_member_add"
+    assert any(event["action"] == "workspace_member_add" for event in ctx["events"])
+    read_events = [
+        event for event in ctx["events"] if event["action"] == "workspace_member_read"
+    ]
+    assert len(read_events) == 1
+    assert read_events[0]["payload"]["outcome"] == "success"
+    assert read_events[0]["payload"]["returned"] == 2
 
 
 def test_update_workspace_member_role_blocks_last_admin(
@@ -262,3 +290,77 @@ def test_remove_workspace_member_blocks_last_admin(
 
     assert exc.value.status_code == 400
     assert "last workspace admin" in exc.value.detail
+
+
+def test_add_workspace_member_unknown_email_uses_generic_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _setup_members_env(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc:
+        add_workspace_member(
+            workspace_id=str(ctx["workspace_id"]),
+            payload=WorkspaceMemberAddRequest(email="missing@local", role="member"),
+            current_user=ctx["current_user"],
+        )
+
+    assert exc.value.status_code == 400
+    assert exc.value.detail == "Unable to add workspace member with provided input."
+    assert ctx["events"][-1]["action"] == "workspace_member_add"
+    assert ctx["events"][-1]["payload"]["outcome"] == "failure"
+    assert ctx["events"][-1]["payload"]["reason"] == "target_user_not_found"
+
+
+def test_add_workspace_member_requires_existing_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _setup_members_env(monkeypatch)
+    ctx["workspaces"].pop(ctx["workspace_id"])
+
+    with pytest.raises(HTTPException) as exc:
+        add_workspace_member(
+            workspace_id=str(ctx["workspace_id"]),
+            payload=WorkspaceMemberAddRequest(email="member@local", role="member"),
+            current_user=ctx["current_user"],
+        )
+
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "Workspace not found."
+
+
+def test_list_workspace_members_fails_on_missing_user_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _setup_members_env(monkeypatch)
+    missing_user_id = uuid.UUID("cccccccc-cccc-cccc-cccc-cccccccccccc")
+    ctx["memberships"][(ctx["workspace_id"], missing_user_id)] = _build_membership(
+        ctx["workspace_id"],
+        missing_user_id,
+        "member",
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        list_workspace_members(
+            workspace_id=str(ctx["workspace_id"]),
+            current_user=ctx["current_user"],
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Workspace membership data integrity error."
+    read_events = [
+        event for event in ctx["events"] if event["action"] == "workspace_member_read"
+    ]
+    assert len(read_events) == 1
+    assert read_events[0]["payload"]["outcome"] == "failure"
+    assert read_events[0]["payload"]["reason"] == "missing_user_record"
+    assert read_events[0]["payload"]["missing_user_id"] == str(missing_user_id)
+
+
+def test_workspace_member_add_request_normalizes_email() -> None:
+    payload = WorkspaceMemberAddRequest(email="  Member@Example.Org  ", role="member")
+    assert payload.email == "member@example.org"
+
+
+def test_workspace_member_add_request_rejects_invalid_email() -> None:
+    with pytest.raises(ValidationError):
+        WorkspaceMemberAddRequest(email="invalid-email", role="member")

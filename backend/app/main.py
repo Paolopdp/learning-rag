@@ -1,3 +1,4 @@
+import logging
 import uuid
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
@@ -32,6 +33,7 @@ from app.sql_models import UserORM, WorkspaceMemberORM, WorkspaceORM
 from app.store import get_chunk_store
 
 app = FastAPI(title="RAG Backend", version="0.1.0")
+logger = logging.getLogger(__name__)
 
 chunk_store = get_chunk_store()
 
@@ -105,6 +107,12 @@ def to_workspace_member_out(member: WorkspaceMemberORM, user: UserORM) -> Worksp
         role=member.role,
         created_at=member.created_at,
     )
+
+
+def require_workspace_exists(session, workspace_uuid: uuid.UUID) -> None:
+    workspace = session.get(WorkspaceORM, workspace_uuid)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail="Workspace not found.")
 
 
 @app.post("/auth/register", response_model=AuthResponse)
@@ -246,19 +254,49 @@ def list_workspace_members(
     require_workspace_role(workspace_id, current_user)
 
     with SessionLocal() as session:
-        memberships = session.execute(
-            select(WorkspaceMemberORM)
+        require_workspace_exists(session, workspace_uuid)
+        rows = session.execute(
+            select(WorkspaceMemberORM, UserORM)
+            .outerjoin(UserORM, UserORM.id == WorkspaceMemberORM.user_id)
             .where(WorkspaceMemberORM.workspace_id == workspace_uuid)
             .order_by(WorkspaceMemberORM.created_at.asc())
-        ).scalars().all()
+        ).all()
 
         output: list[WorkspaceMemberOut] = []
-        for membership in memberships:
-            user = session.get(UserORM, membership.user_id)
+        for membership, user in rows:
             if user is None:
-                continue
+                missing_user_id = str(membership.user_id)
+                log_event(
+                    workspace_id=workspace_id,
+                    user_id=None if auth_disabled() else current_user.id,
+                    action="workspace_member_read",
+                    payload={
+                        "outcome": "failure",
+                        "reason": "missing_user_record",
+                        "missing_user_id": missing_user_id,
+                        "returned_before_error": len(output),
+                    },
+                )
+                logger.warning(
+                    "Workspace membership integrity error: workspace_id=%s missing_user_id=%s",
+                    workspace_id,
+                    missing_user_id,
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail="Workspace membership data integrity error.",
+                )
             output.append(to_workspace_member_out(membership, user))
-        return output
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="workspace_member_read",
+        payload={
+            "returned": len(output),
+            "outcome": "success",
+        },
+    )
+    return output
 
 
 @app.post("/workspaces/{workspace_id}/members", response_model=WorkspaceMemberOut)
@@ -271,11 +309,27 @@ def add_workspace_member(
     require_workspace_role(workspace_id, current_user, role="admin")
 
     with SessionLocal() as session:
+        require_workspace_exists(session, workspace_uuid)
         user = session.execute(
-            select(UserORM).where(UserORM.email == payload.email)
+            select(UserORM).where(func.lower(UserORM.email) == payload.email)
         ).scalar_one_or_none()
         if user is None:
-            raise HTTPException(status_code=404, detail="User not found.")
+            domain = payload.email.split("@")[-1] if "@" in payload.email else "unknown"
+            log_event(
+                workspace_id=workspace_id,
+                user_id=None if auth_disabled() else current_user.id,
+                action="workspace_member_add",
+                payload={
+                    "role": payload.role,
+                    "target_email_domain": domain,
+                    "outcome": "failure",
+                    "reason": "target_user_not_found",
+                },
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to add workspace member with provided input.",
+            )
 
         existing = session.get(
             WorkspaceMemberORM,
@@ -285,7 +339,23 @@ def add_workspace_member(
             },
         )
         if existing is not None:
-            raise HTTPException(status_code=400, detail="User is already a workspace member.")
+            domain = payload.email.split("@")[-1] if "@" in payload.email else "unknown"
+            log_event(
+                workspace_id=workspace_id,
+                user_id=None if auth_disabled() else current_user.id,
+                action="workspace_member_add",
+                payload={
+                    "target_user_id": str(user.id),
+                    "role": payload.role,
+                    "target_email_domain": domain,
+                    "outcome": "failure",
+                    "reason": "already_member",
+                },
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Unable to add workspace member with provided input.",
+            )
 
         membership = WorkspaceMemberORM(
             workspace_id=workspace_uuid,
@@ -308,6 +378,7 @@ def add_workspace_member(
             "target_user_id": target_user_id,
             "role": payload.role,
             "target_email_domain": domain,
+            "outcome": "success",
         },
     )
     return result
@@ -328,6 +399,7 @@ def update_workspace_member_role(
     require_workspace_role(workspace_id, current_user, role="admin")
 
     with SessionLocal() as session:
+        require_workspace_exists(session, workspace_uuid)
         membership = session.get(
             WorkspaceMemberORM,
             {
@@ -379,6 +451,7 @@ def remove_workspace_member(
     require_workspace_role(workspace_id, current_user, role="admin")
 
     with SessionLocal() as session:
+        require_workspace_exists(session, workspace_uuid)
         membership = session.get(
             WorkspaceMemberORM,
             {
@@ -534,7 +607,7 @@ def update_document_classification(
 ) -> DocumentInventoryItem:
     require_workspace_uuid(workspace_id)
     require_document_uuid(document_id)
-    require_workspace_role(workspace_id, current_user)
+    require_workspace_role(workspace_id, current_user, role="admin")
 
     document = chunk_store.update_document_classification(
         workspace_id, document_id, payload.classification_label
