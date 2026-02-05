@@ -13,7 +13,19 @@ class Document:
     license: str | None
     accessed_at: date | None
     text: str
+    classification_label: str = "internal"
     document_id: str = field(default_factory=lambda: str(uuid4()))
+
+
+@dataclass(frozen=True)
+class DocumentMetadata:
+    document_id: str
+    workspace_id: str | None
+    title: str
+    source_url: str | None
+    license: str | None
+    accessed_at: date | None
+    classification_label: str
 
 
 @dataclass(frozen=True)

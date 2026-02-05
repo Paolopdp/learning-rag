@@ -38,6 +38,21 @@ type AuditEvent = {
   created_at: string;
 };
 
+type ClassificationLabel =
+  | "public"
+  | "internal"
+  | "confidential"
+  | "restricted";
+
+type DocumentInventoryItem = {
+  id: string;
+  title: string;
+  source_url: string | null;
+  license: string | null;
+  accessed_at: string | null;
+  classification_label: ClassificationLabel;
+};
+
 type AuthResponse = {
   access_token: string;
   token_type: string;
@@ -60,6 +75,13 @@ const SAMPLE_QUESTIONS = [
   },
 ];
 
+const CLASSIFICATION_OPTIONS: { value: ClassificationLabel; label: string }[] = [
+  { value: "internal", label: "Internal" },
+  { value: "public", label: "Public" },
+  { value: "confidential", label: "Confidential" },
+  { value: "restricted", label: "Restricted" },
+];
+
 export default function Home() {
   const [email, setEmail] = useState("demo@local");
   const [password, setPassword] = useState("change-me-now");
@@ -72,14 +94,35 @@ export default function Home() {
   const [answer, setAnswer] = useState<string>("");
   const [citations, setCitations] = useState<Citation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [documents, setDocuments] = useState<DocumentInventoryItem[]>([]);
   const [busyIngest, setBusyIngest] = useState(false);
   const [busyQuery, setBusyQuery] = useState(false);
   const [busyAuth, setBusyAuth] = useState(false);
   const [busyAudit, setBusyAudit] = useState(false);
+  const [busyDocuments, setBusyDocuments] = useState(false);
+  const [busyDocumentUpdateId, setBusyDocumentUpdateId] = useState<string | null>(
+    null
+  );
   const [error, setError] = useState<string | null>(null);
 
   const formatAuditTimestamp = (value: string) =>
     new Date(value).toLocaleString();
+  const formatAccessDate = (value: string | null) =>
+    value ? new Date(`${value}T00:00:00`).toLocaleDateString() : "—";
+  const safeExternalUrl = (value: string | null): URL | null => {
+    if (!value) {
+      return null;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
 
   const isReady = useMemo(
     () => Boolean(ingestInfo && ingestInfo.chunks > 0),
@@ -132,6 +175,80 @@ export default function Home() {
     }
   };
 
+  const loadDocuments = async (
+    accessToken: string | null = token,
+    workspaceId: string | null = workspace?.id ?? null
+  ) => {
+    if (!accessToken || !workspaceId) {
+      setDocuments([]);
+      return;
+    }
+    setBusyDocuments(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspaceId}/documents`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Document inventory request failed.");
+      }
+      const payload = (await response.json()) as DocumentInventoryItem[];
+      setDocuments(payload);
+    } catch (err) {
+      setDocuments([]);
+      setError(
+        err instanceof Error ? err.message : "Document inventory request failed."
+      );
+    } finally {
+      setBusyDocuments(false);
+    }
+  };
+
+  const updateDocumentClassification = async (
+    documentId: string,
+    classificationLabel: ClassificationLabel
+  ) => {
+    if (!token || !workspace) {
+      setError("Login first to update document classification.");
+      return;
+    }
+    setBusyDocumentUpdateId(documentId);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/documents/${documentId}/classification`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            classification_label: classificationLabel,
+          }),
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Classification update failed.");
+      }
+      const payload = (await response.json()) as DocumentInventoryItem;
+      setDocuments((current) =>
+        current.map((document) =>
+          document.id === payload.id ? payload : document
+        )
+      );
+      await loadAudit(token, workspace.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Classification update failed.");
+    } finally {
+      setBusyDocumentUpdateId(null);
+    }
+  };
+
   const handleRegister = async () => {
     setBusyAuth(true);
     setError(null);
@@ -153,8 +270,10 @@ export default function Home() {
       setAnswer("");
       setCitations([]);
       setAuditEvents([]);
+      setDocuments([]);
       if (payload.default_workspace) {
         await loadAudit(payload.access_token, payload.default_workspace.id);
+        await loadDocuments(payload.access_token, payload.default_workspace.id);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
@@ -179,13 +298,16 @@ export default function Home() {
       const payload = (await response.json()) as AuthResponse;
       setToken(payload.access_token);
       setAuditEvents([]);
+      setDocuments([]);
       if (payload.default_workspace) {
         setWorkspace(payload.default_workspace);
         setWorkspaces([payload.default_workspace]);
         await loadAudit(payload.access_token, payload.default_workspace.id);
+        await loadDocuments(payload.access_token, payload.default_workspace.id);
       } else {
         const selected = await fetchWorkspaces(payload.access_token);
         await loadAudit(payload.access_token, selected?.id ?? null);
+        await loadDocuments(payload.access_token, selected?.id ?? null);
       }
       setIngestInfo(null);
       setAnswer("");
@@ -219,6 +341,7 @@ export default function Home() {
       const payload = (await response.json()) as IngestResponse;
       setIngestInfo(payload);
       await loadAudit(token, workspace.id);
+      await loadDocuments(token, workspace.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ingest failed.");
     } finally {
@@ -466,34 +589,109 @@ export default function Home() {
                   </p>
                 ) : (
                   <div className="mt-3 grid gap-3">
-                    {citations.map((citation) => (
-                      <div
-                        key={citation.chunk_id}
-                        className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-[color:var(--foreground)]">
-                            {citation.source_title}
-                          </span>
-                          <span className="rounded-full bg-white px-2 py-1 text-xs text-[color:var(--muted)]">
-                            score {citation.score.toFixed(3)}
-                          </span>
+                    {citations.map((citation) => {
+                      const safeSourceUrl = safeExternalUrl(citation.source_url);
+                      return (
+                        <div
+                          key={citation.chunk_id}
+                          className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-[color:var(--foreground)]">
+                              {citation.source_title}
+                            </span>
+                            <span className="rounded-full bg-white px-2 py-1 text-xs text-[color:var(--muted)]">
+                              score {citation.score.toFixed(3)}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[13px] text-[color:var(--muted)]">
+                            {citation.excerpt}
+                          </p>
+                          {safeSourceUrl ? (
+                            <a
+                              className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
+                              href={safeSourceUrl.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Source ({safeSourceUrl.host})
+                            </a>
+                          ) : null}
                         </div>
-                        <p className="mt-2 text-[13px] text-[color:var(--muted)]">
-                          {citation.excerpt}
-                        </p>
-                        {citation.source_url ? (
-                          <a
-                            className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
-                            href={citation.source_url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Source
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-2xl border border-[color:var(--border)] bg-white px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                    Document Inventory
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => loadDocuments()}
+                    disabled={!canUseApi || busyDocuments}
+                    className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyDocuments ? "Loading..." : "Refresh"}
+                  </button>
+                </div>
+                {documents.length === 0 ? (
+                  <p className="mt-3 text-sm text-[color:var(--muted)]">
+                    No documents yet. Run ingest to populate inventory.
+                  </p>
+                ) : (
+                  <div className="mt-3 grid gap-3">
+                    {documents.map((document) => {
+                      const safeSourceUrl = safeExternalUrl(document.source_url);
+                      return (
+                        <div
+                          key={document.id}
+                          className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-[color:var(--foreground)]">
+                              {document.title}
+                            </span>
+                            <select
+                              value={document.classification_label}
+                              onChange={(event) =>
+                                updateDocumentClassification(
+                                  document.id,
+                                  event.target.value as ClassificationLabel
+                                )
+                              }
+                              disabled={busyDocumentUpdateId === document.id}
+                              className="rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {CLASSIFICATION_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-2 text-xs text-[color:var(--muted)]">
+                            Accessed: {formatAccessDate(document.accessed_at)}
+                          </div>
+                          <div className="mt-1 text-xs text-[color:var(--muted)]">
+                            License: {document.license ?? "—"}
+                          </div>
+                          {safeSourceUrl ? (
+                            <a
+                              className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
+                              href={safeSourceUrl.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Source ({safeSourceUrl.host})
+                            </a>
+                          ) : null}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>

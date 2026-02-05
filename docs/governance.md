@@ -17,6 +17,13 @@ This project includes a minimal governance baseline focused on traceability and 
 - Ordering: newest first (`created_at DESC`).
 - Pagination: currently limit-only (bounded server-side).
 
+## Classification labels
+- Document inventory endpoint: `GET /workspaces/{workspace_id}/documents`
+- Classification update endpoint:
+  `PATCH /workspaces/{workspace_id}/documents/{document_id}/classification`
+- Allowed labels: `public`, `internal`, `confidential`, `restricted`
+- Default label at ingestion: `internal`
+
 ## Storage and index
 - Audit logs are stored only when `RAG_STORE=postgres`.
 - Retrieval is optimized for workspace-scoped chronological reads with:
@@ -39,4 +46,13 @@ curl -X POST http://127.0.0.1:8000/auth/register \
 # Read workspace audit events
 curl -H "Authorization: Bearer TOKEN" \
   "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/audit?limit=20"
+
+# List documents and update one classification label
+curl -H "Authorization: Bearer TOKEN" \
+  "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents"
+curl -X PATCH \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"classification_label":"restricted"}' \
+  "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents/DOCUMENT_ID/classification"
 ```
