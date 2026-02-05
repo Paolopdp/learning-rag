@@ -4,6 +4,7 @@ import type { FormEvent } from "react";
 import { useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+const DOCUMENT_PAGE_SIZE = 50;
 
 type IngestResponse = {
   documents: number;
@@ -14,6 +15,15 @@ type Workspace = {
   id: string;
   name: string;
   role: string;
+};
+
+type WorkspaceRole = "admin" | "member";
+
+type WorkspaceMember = {
+  user_id: string;
+  email: string;
+  role: WorkspaceRole;
+  created_at: string;
 };
 
 type Citation = {
@@ -85,9 +95,15 @@ const CLASSIFICATION_OPTIONS: { value: ClassificationLabel; label: string }[] = 
 export default function Home() {
   const [email, setEmail] = useState("demo@local");
   const [password, setPassword] = useState("change-me-now");
+  const [currentUser, setCurrentUser] = useState<{ id: string; email: string } | null>(
+    null
+  );
   const [token, setToken] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [members, setMembers] = useState<WorkspaceMember[]>([]);
+  const [memberEmail, setMemberEmail] = useState("");
+  const [memberRole, setMemberRole] = useState<WorkspaceRole>("member");
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0].text);
   const [topK, setTopK] = useState(3);
   const [ingestInfo, setIngestInfo] = useState<IngestResponse | null>(null);
@@ -95,12 +111,21 @@ export default function Home() {
   const [citations, setCitations] = useState<Citation[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [documents, setDocuments] = useState<DocumentInventoryItem[]>([]);
+  const [documentOffset, setDocumentOffset] = useState(0);
+  const [hasMoreDocuments, setHasMoreDocuments] = useState(false);
   const [busyIngest, setBusyIngest] = useState(false);
   const [busyQuery, setBusyQuery] = useState(false);
   const [busyAuth, setBusyAuth] = useState(false);
   const [busyAudit, setBusyAudit] = useState(false);
   const [busyDocuments, setBusyDocuments] = useState(false);
+  const [busyMembers, setBusyMembers] = useState(false);
+  const [busyMemberAction, setBusyMemberAction] = useState<"add" | "update" | "remove" | null>(
+    null
+  );
   const [busyDocumentUpdateId, setBusyDocumentUpdateId] = useState<string | null>(
+    null
+  );
+  const [busyMemberMutationId, setBusyMemberMutationId] = useState<string | null>(
     null
   );
   const [error, setError] = useState<string | null>(null);
@@ -109,6 +134,8 @@ export default function Home() {
     new Date(value).toLocaleString();
   const formatAccessDate = (value: string | null) =>
     value ? new Date(`${value}T00:00:00`).toLocaleDateString() : "—";
+  const formatMemberTimestamp = (value: string) =>
+    new Date(value).toLocaleString();
   const safeExternalUrl = (value: string | null): URL | null => {
     if (!value) {
       return null;
@@ -177,16 +204,25 @@ export default function Home() {
 
   const loadDocuments = async (
     accessToken: string | null = token,
-    workspaceId: string | null = workspace?.id ?? null
+    workspaceId: string | null = workspace?.id ?? null,
+    options: { offset?: number; append?: boolean } = {}
   ) => {
+    const nextOffset = options.offset ?? 0;
+    const append = options.append ?? false;
     if (!accessToken || !workspaceId) {
       setDocuments([]);
+      setDocumentOffset(0);
+      setHasMoreDocuments(false);
       return;
     }
     setBusyDocuments(true);
     try {
+      const params = new URLSearchParams({
+        limit: String(DOCUMENT_PAGE_SIZE),
+        offset: String(nextOffset),
+      });
       const response = await fetch(
-        `${API_BASE}/workspaces/${workspaceId}/documents`,
+        `${API_BASE}/workspaces/${workspaceId}/documents?${params.toString()}`,
         {
           headers: { Authorization: `Bearer ${accessToken}` },
         }
@@ -196,14 +232,176 @@ export default function Home() {
         throw new Error(payload?.detail ?? "Document inventory request failed.");
       }
       const payload = (await response.json()) as DocumentInventoryItem[];
-      setDocuments(payload);
+      if (append) {
+        setDocuments((current) => {
+          const merged = [...current];
+          for (const item of payload) {
+            if (!merged.some((existing) => existing.id === item.id)) {
+              merged.push(item);
+            }
+          }
+          return merged;
+        });
+      } else {
+        setDocuments(payload);
+      }
+      setDocumentOffset(nextOffset);
+      setHasMoreDocuments(payload.length === DOCUMENT_PAGE_SIZE);
     } catch (err) {
-      setDocuments([]);
+      if (!append) {
+        setDocuments([]);
+      }
       setError(
         err instanceof Error ? err.message : "Document inventory request failed."
       );
     } finally {
       setBusyDocuments(false);
+    }
+  };
+
+  const loadMembers = async (
+    accessToken: string | null = token,
+    workspaceId: string | null = workspace?.id ?? null
+  ) => {
+    if (!accessToken || !workspaceId) {
+      setMembers([]);
+      return;
+    }
+    setBusyMembers(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspaceId}/members`,
+        {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Workspace members request failed.");
+      }
+      const payload = (await response.json()) as WorkspaceMember[];
+      setMembers(payload);
+    } catch (err) {
+      setMembers([]);
+      setError(
+        err instanceof Error ? err.message : "Workspace members request failed."
+      );
+    } finally {
+      setBusyMembers(false);
+    }
+  };
+
+  const addWorkspaceMember = async () => {
+    if (!token || !workspace) {
+      setError("Login first to manage workspace members.");
+      return;
+    }
+    if (!memberEmail.trim()) {
+      setError("Member email is required.");
+      return;
+    }
+    setBusyMemberAction("add");
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/members`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            email: memberEmail.trim(),
+            role: memberRole,
+          }),
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Adding workspace member failed.");
+      }
+      setMemberEmail("");
+      setMemberRole("member");
+      await loadMembers(token, workspace.id);
+      await loadAudit(token, workspace.id);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Adding workspace member failed."
+      );
+    } finally {
+      setBusyMemberAction(null);
+    }
+  };
+
+  const updateWorkspaceMemberRole = async (
+    userId: string,
+    role: WorkspaceRole
+  ) => {
+    if (!token || !workspace) {
+      setError("Login first to manage workspace members.");
+      return;
+    }
+    setBusyMemberAction("update");
+    setBusyMemberMutationId(userId);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/members/${userId}/role`,
+        {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ role }),
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Updating member role failed.");
+      }
+      await loadMembers(token, workspace.id);
+      await loadAudit(token, workspace.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Updating member role failed.");
+    } finally {
+      setBusyMemberAction(null);
+      setBusyMemberMutationId(null);
+    }
+  };
+
+  const removeWorkspaceMember = async (userId: string) => {
+    if (!token || !workspace) {
+      setError("Login first to manage workspace members.");
+      return;
+    }
+    setBusyMemberAction("remove");
+    setBusyMemberMutationId(userId);
+    setError(null);
+    try {
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/members/${userId}`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Removing workspace member failed.");
+      }
+      await loadMembers(token, workspace.id);
+      await loadAudit(token, workspace.id);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Removing workspace member failed."
+      );
+    } finally {
+      setBusyMemberAction(null);
+      setBusyMemberMutationId(null);
     }
   };
 
@@ -264,6 +462,7 @@ export default function Home() {
       }
       const payload = (await response.json()) as AuthResponse;
       setToken(payload.access_token);
+      setCurrentUser(payload.user);
       setWorkspace(payload.default_workspace);
       setWorkspaces(payload.default_workspace ? [payload.default_workspace] : []);
       setIngestInfo(null);
@@ -271,9 +470,15 @@ export default function Home() {
       setCitations([]);
       setAuditEvents([]);
       setDocuments([]);
+      setDocumentOffset(0);
+      setHasMoreDocuments(false);
+      setMembers([]);
       if (payload.default_workspace) {
         await loadAudit(payload.access_token, payload.default_workspace.id);
-        await loadDocuments(payload.access_token, payload.default_workspace.id);
+        await loadDocuments(payload.access_token, payload.default_workspace.id, {
+          offset: 0,
+        });
+        await loadMembers(payload.access_token, payload.default_workspace.id);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
@@ -297,17 +502,27 @@ export default function Home() {
       }
       const payload = (await response.json()) as AuthResponse;
       setToken(payload.access_token);
+      setCurrentUser(payload.user);
       setAuditEvents([]);
       setDocuments([]);
+      setDocumentOffset(0);
+      setHasMoreDocuments(false);
+      setMembers([]);
       if (payload.default_workspace) {
         setWorkspace(payload.default_workspace);
         setWorkspaces([payload.default_workspace]);
         await loadAudit(payload.access_token, payload.default_workspace.id);
-        await loadDocuments(payload.access_token, payload.default_workspace.id);
+        await loadDocuments(payload.access_token, payload.default_workspace.id, {
+          offset: 0,
+        });
+        await loadMembers(payload.access_token, payload.default_workspace.id);
       } else {
         const selected = await fetchWorkspaces(payload.access_token);
         await loadAudit(payload.access_token, selected?.id ?? null);
-        await loadDocuments(payload.access_token, selected?.id ?? null);
+        await loadDocuments(payload.access_token, selected?.id ?? null, {
+          offset: 0,
+        });
+        await loadMembers(payload.access_token, selected?.id ?? null);
       }
       setIngestInfo(null);
       setAnswer("");
@@ -341,7 +556,7 @@ export default function Home() {
       const payload = (await response.json()) as IngestResponse;
       setIngestInfo(payload);
       await loadAudit(token, workspace.id);
-      await loadDocuments(token, workspace.id);
+      await loadDocuments(token, workspace.id, { offset: 0 });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ingest failed.");
     } finally {
@@ -631,7 +846,7 @@ export default function Home() {
                   </p>
                   <button
                     type="button"
-                    onClick={() => loadDocuments()}
+                    onClick={() => loadDocuments(token, workspace?.id ?? null, { offset: 0 })}
                     disabled={!canUseApi || busyDocuments}
                     className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
@@ -692,6 +907,119 @@ export default function Home() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+                {hasMoreDocuments ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      loadDocuments(token, workspace?.id ?? null, {
+                        offset: documentOffset + DOCUMENT_PAGE_SIZE,
+                        append: true,
+                      })
+                    }
+                    disabled={!canUseApi || busyDocuments}
+                    className="mt-3 rounded-full border border-[color:var(--border)] bg-white px-4 py-1 text-xs text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyDocuments ? "Loading..." : "Load more"}
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="rounded-2xl border border-[color:var(--border)] bg-white px-4 py-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                    Workspace Members
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => loadMembers()}
+                    disabled={!canUseApi || busyMembers}
+                    className="rounded-full border border-[color:var(--border)] px-3 py-1 text-xs text-[color:var(--muted)] transition hover:border-[color:var(--accent)] hover:text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {busyMembers ? "Loading..." : "Refresh"}
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2 rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3">
+                  <label className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                    Add Member
+                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <input
+                      type="email"
+                      value={memberEmail}
+                      onChange={(event) => setMemberEmail(event.target.value)}
+                      placeholder="member@domain"
+                      className="min-w-[220px] flex-1 rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-sm"
+                    />
+                    <select
+                      value={memberRole}
+                      onChange={(event) =>
+                        setMemberRole(event.target.value as WorkspaceRole)
+                      }
+                      className="rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-sm"
+                    >
+                      <option value="member">Member</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                    <button
+                      type="button"
+                      onClick={addWorkspaceMember}
+                      disabled={!canUseApi || busyMemberAction === "add"}
+                      className="rounded-full bg-[color:var(--foreground)] px-4 py-1 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {busyMemberAction === "add" ? "Adding..." : "Add"}
+                    </button>
+                  </div>
+                </div>
+                {members.length === 0 ? (
+                  <p className="mt-3 text-sm text-[color:var(--muted)]">
+                    No members found for this workspace.
+                  </p>
+                ) : (
+                  <div className="mt-3 grid gap-3">
+                    {members.map((member) => (
+                      <div
+                        key={member.user_id}
+                        className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-semibold text-[color:var(--foreground)]">
+                            {member.email}
+                          </span>
+                          <span className="text-xs text-[color:var(--muted)]">
+                            Added {formatMemberTimestamp(member.created_at)}
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <select
+                            value={member.role}
+                            onChange={(event) =>
+                              updateWorkspaceMemberRole(
+                                member.user_id,
+                                event.target.value as WorkspaceRole
+                              )
+                            }
+                            disabled={busyMemberMutationId === member.user_id}
+                            className="rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            <option value="member">Member</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => removeWorkspaceMember(member.user_id)}
+                            disabled={
+                              busyMemberMutationId === member.user_id ||
+                              currentUser?.id === member.user_id
+                            }
+                            className="rounded-full border border-red-200 bg-white px-3 py-1 text-xs text-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

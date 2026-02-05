@@ -8,7 +8,7 @@ Local-first, open-source RAG system focused on **secure-by-default** AI applicat
 ## Status
 - Backend MVP skeleton is live (auth + workspaces + citations).
 - First vertical slice: ingest -> chunk -> embed -> retrieve -> answer with citations.
-- Minimal frontend UI is available (auth, ingest/query, citations, audit log, document inventory).
+- Minimal frontend UI is available (auth, ingest/query, citations, audit log, document inventory, workspace members).
 
 ## Repo Layout
 - `backend/` FastAPI service (current focus)
@@ -98,7 +98,7 @@ curl -H "Authorization: Bearer TOKEN" \
 
 # Document inventory
 curl -H "Authorization: Bearer TOKEN" \
-  http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents
+  "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents?limit=50&offset=0"
 
 # Update document classification label
 curl -X PATCH http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents/DOCUMENT_ID/classification \
@@ -106,11 +106,33 @@ curl -X PATCH http://127.0.0.1:8000/workspaces/WORKSPACE_ID/documents/DOCUMENT_I
   -H "Authorization: Bearer TOKEN" \
   -d '{"classification_label":"confidential"}'
 
+# List workspace members
+curl -H "Authorization: Bearer TOKEN" \
+  http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members
+
+# Add workspace member (user must already exist)
+curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"email":"member@local","role":"member"}'
+
+# Update member role
+curl -X PATCH http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members/USER_ID/role \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TOKEN" \
+  -d '{"role":"admin"}'
+
+# Remove member
+curl -X DELETE \
+  -H "Authorization: Bearer TOKEN" \
+  http://127.0.0.1:8000/workspaces/WORKSPACE_ID/members/USER_ID
+
 # List workspaces
 curl -H "Authorization: Bearer TOKEN" http://127.0.0.1:8000/workspaces
 ```
 Audit entries store **metadata only** (no raw prompts or document text).
 Sensitive keys (e.g., `question`, `content`) are redacted server-side.
+Each audit payload includes an `outcome` (`success` or `failure`).
 Auth events (register/login) are recorded with metadata only.
 Audit logging is best-effort and will not block core API operations if the DB is unavailable.
 Invalid workspace IDs return `400` before any processing.
@@ -200,8 +222,7 @@ pytest
 
 ## Roadmap (Short)
 - Add policy checks tied to document classification labels.
-- Expand audit log UI and governance views.
-- Add basic workspace member management UI.
+- Expand governance UI and enforcement views.
 - Extend security/eval tooling in CI.
 
 ## Notes
