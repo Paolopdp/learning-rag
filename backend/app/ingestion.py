@@ -4,6 +4,7 @@ from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 from app.models import Chunk, Document
 
@@ -13,6 +14,7 @@ _HEADER_KEYS = {
     "licenza": "license",
     "accesso": "accessed_at",
 }
+_ALLOWED_SOURCE_URL_SCHEMES = {"http", "https"}
 
 
 def load_documents_from_dir(directory: Path, workspace_id: str) -> list[Document]:
@@ -28,7 +30,7 @@ def parse_wikipedia_file(path: Path, workspace_id: str | None = None) -> Documen
     metadata = _parse_header(header)
 
     title = metadata.get("title") or path.stem
-    source_url = metadata.get("source_url")
+    source_url = _sanitize_source_url(metadata.get("source_url"))
     license_text = metadata.get("license")
     accessed_at = _parse_date(metadata.get("accessed_at"))
 
@@ -138,6 +140,20 @@ def _parse_date(value: str | None) -> date | None:
 
 def _normalize_text(text: str) -> str:
     return " ".join(text.split())
+
+
+def _sanitize_source_url(value: str | None) -> str | None:
+    if not value:
+        return None
+    candidate = value.strip()
+    if not candidate:
+        return None
+    parsed = urlparse(candidate)
+    if parsed.scheme.lower() not in _ALLOWED_SOURCE_URL_SCHEMES:
+        return None
+    if not parsed.netloc:
+        return None
+    return candidate
 
 
 # Debug helper for quick inspection during development.

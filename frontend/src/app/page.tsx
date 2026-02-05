@@ -109,6 +109,20 @@ export default function Home() {
     new Date(value).toLocaleString();
   const formatAccessDate = (value: string | null) =>
     value ? new Date(`${value}T00:00:00`).toLocaleDateString() : "—";
+  const safeExternalUrl = (value: string | null): URL | null => {
+    if (!value) {
+      return null;
+    }
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
 
   const isReady = useMemo(
     () => Boolean(ingestInfo && ingestInfo.chunks > 0),
@@ -575,34 +589,37 @@ export default function Home() {
                   </p>
                 ) : (
                   <div className="mt-3 grid gap-3">
-                    {citations.map((citation) => (
-                      <div
-                        key={citation.chunk_id}
-                        className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-[color:var(--foreground)]">
-                            {citation.source_title}
-                          </span>
-                          <span className="rounded-full bg-white px-2 py-1 text-xs text-[color:var(--muted)]">
-                            score {citation.score.toFixed(3)}
-                          </span>
+                    {citations.map((citation) => {
+                      const safeSourceUrl = safeExternalUrl(citation.source_url);
+                      return (
+                        <div
+                          key={citation.chunk_id}
+                          className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-[color:var(--foreground)]">
+                              {citation.source_title}
+                            </span>
+                            <span className="rounded-full bg-white px-2 py-1 text-xs text-[color:var(--muted)]">
+                              score {citation.score.toFixed(3)}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-[13px] text-[color:var(--muted)]">
+                            {citation.excerpt}
+                          </p>
+                          {safeSourceUrl ? (
+                            <a
+                              className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
+                              href={safeSourceUrl.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Source ({safeSourceUrl.host})
+                            </a>
+                          ) : null}
                         </div>
-                        <p className="mt-2 text-[13px] text-[color:var(--muted)]">
-                          {citation.excerpt}
-                        </p>
-                        {citation.source_url ? (
-                          <a
-                            className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
-                            href={citation.source_url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Source
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -627,51 +644,54 @@ export default function Home() {
                   </p>
                 ) : (
                   <div className="mt-3 grid gap-3">
-                    {documents.map((document) => (
-                      <div
-                        key={document.id}
-                        className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-semibold text-[color:var(--foreground)]">
-                            {document.title}
-                          </span>
-                          <select
-                            value={document.classification_label}
-                            onChange={(event) =>
-                              updateDocumentClassification(
-                                document.id,
-                                event.target.value as ClassificationLabel
-                              )
-                            }
-                            disabled={busyDocumentUpdateId === document.id}
-                            className="rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            {CLASSIFICATION_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
+                    {documents.map((document) => {
+                      const safeSourceUrl = safeExternalUrl(document.source_url);
+                      return (
+                        <div
+                          key={document.id}
+                          className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] p-3 text-sm"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="font-semibold text-[color:var(--foreground)]">
+                              {document.title}
+                            </span>
+                            <select
+                              value={document.classification_label}
+                              onChange={(event) =>
+                                updateDocumentClassification(
+                                  document.id,
+                                  event.target.value as ClassificationLabel
+                                )
+                              }
+                              disabled={busyDocumentUpdateId === document.id}
+                              className="rounded-full border border-[color:var(--border)] bg-white px-3 py-1 text-xs text-[color:var(--foreground)] disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {CLASSIFICATION_OPTIONS.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="mt-2 text-xs text-[color:var(--muted)]">
+                            Accessed: {formatAccessDate(document.accessed_at)}
+                          </div>
+                          <div className="mt-1 text-xs text-[color:var(--muted)]">
+                            License: {document.license ?? "—"}
+                          </div>
+                          {safeSourceUrl ? (
+                            <a
+                              className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
+                              href={safeSourceUrl.href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Source ({safeSourceUrl.host})
+                            </a>
+                          ) : null}
                         </div>
-                        <div className="mt-2 text-xs text-[color:var(--muted)]">
-                          Accessed: {formatAccessDate(document.accessed_at)}
-                        </div>
-                        <div className="mt-1 text-xs text-[color:var(--muted)]">
-                          License: {document.license ?? "—"}
-                        </div>
-                        {document.source_url ? (
-                          <a
-                            className="mt-2 inline-flex text-xs text-[color:var(--accent)] hover:underline"
-                            href={document.source_url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Source
-                          </a>
-                        ) : null}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
