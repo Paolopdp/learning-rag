@@ -18,6 +18,17 @@ class Document:
 
 
 @dataclass(frozen=True)
+class DocumentMetadata:
+    document_id: str
+    workspace_id: str | None
+    title: str
+    source_url: str | None
+    license: str | None
+    accessed_at: date | None
+    classification_label: str
+
+
+@dataclass(frozen=True)
 class Chunk:
     document_id: str
     workspace_id: str | None

@@ -32,6 +32,9 @@ app = FastAPI(title="RAG Backend", version="0.1.0")
 
 chunk_store = get_chunk_store()
 
+DEFAULT_DOCUMENTS_LIMIT = 50
+MAX_DOCUMENTS_LIMIT = 200
+
 configure_otel(app)
 
 app.add_middleware(
@@ -285,12 +288,31 @@ def query(
 @app.get("/workspaces/{workspace_id}/documents", response_model=list[DocumentInventoryItem])
 def list_documents(
     workspace_id: str,
+    limit: int = DEFAULT_DOCUMENTS_LIMIT,
+    offset: int = 0,
     current_user: UserContext = Depends(get_current_user),
 ) -> list[DocumentInventoryItem]:
     require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
 
-    documents = chunk_store.list_documents(workspace_id)
+    safe_limit = max(1, min(limit, MAX_DOCUMENTS_LIMIT))
+    safe_offset = max(0, offset)
+    documents = chunk_store.list_documents(
+        workspace_id,
+        limit=safe_limit,
+        offset=safe_offset,
+    )
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="document_inventory_read",
+        payload={
+            "limit": safe_limit,
+            "offset": safe_offset,
+            "returned": len(documents),
+            "outcome": "success",
+        },
+    )
     return [to_document_inventory_item(document) for document in documents]
 
 
@@ -312,6 +334,17 @@ def update_document_classification(
         workspace_id, document_id, payload.classification_label
     )
     if document is None:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="document_classification_update",
+            payload={
+                "document_id": document_id,
+                "classification_label": payload.classification_label,
+                "outcome": "failure",
+                "reason": "document_not_found",
+            },
+        )
         raise HTTPException(status_code=404, detail="Document not found.")
 
     log_event(
@@ -321,6 +354,7 @@ def update_document_classification(
         payload={
             "document_id": document_id,
             "classification_label": payload.classification_label,
+            "outcome": "success",
         },
     )
     return to_document_inventory_item(document)

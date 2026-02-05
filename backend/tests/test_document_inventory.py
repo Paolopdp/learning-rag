@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from app import main as app_main
 from app.main import app
 
 
@@ -94,3 +95,70 @@ def test_document_classification_is_workspace_scoped() -> None:
         json={"classification_label": "restricted"},
     )
     assert cross_update.status_code == 404
+
+
+def test_document_inventory_supports_limit_and_offset() -> None:
+    client = TestClient(app)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    ingest = client.post(f"/workspaces/{workspace_id}/ingest/demo")
+    assert ingest.status_code == 200
+
+    page_one = client.get(f"/workspaces/{workspace_id}/documents?limit=1&offset=0")
+    page_two = client.get(f"/workspaces/{workspace_id}/documents?limit=1&offset=1")
+
+    assert page_one.status_code == 200
+    assert page_two.status_code == 200
+    assert len(page_one.json()) == 1
+    assert len(page_two.json()) == 1
+    assert page_one.json()[0]["id"] != page_two.json()[0]["id"]
+
+
+def test_document_inventory_logs_read_event(monkeypatch) -> None:
+    events = []
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    client = TestClient(app)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    ingest = client.post(f"/workspaces/{workspace_id}/ingest/demo")
+    assert ingest.status_code == 200
+
+    response = client.get(f"/workspaces/{workspace_id}/documents?limit=2&offset=1")
+    assert response.status_code == 200
+
+    read_events = [event for event in events if event["action"] == "document_inventory_read"]
+    assert len(read_events) == 1
+    payload = read_events[0]["payload"]
+    assert payload["limit"] == 2
+    assert payload["offset"] == 1
+    assert payload["outcome"] == "success"
+    assert payload["returned"] == len(response.json())
+
+
+def test_document_classification_logs_failure_outcome(monkeypatch) -> None:
+    events = []
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    client = TestClient(app)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    missing_document_id = "33333333-3333-3333-3333-333333333333"
+
+    ingest = client.post(f"/workspaces/{workspace_id}/ingest/demo")
+    assert ingest.status_code == 200
+
+    response = client.patch(
+        f"/workspaces/{workspace_id}/documents/{missing_document_id}/classification",
+        json={"classification_label": "restricted"},
+    )
+    assert response.status_code == 404
+
+    failure_events = [
+        event for event in events if event["action"] == "document_classification_update"
+    ]
+    assert len(failure_events) > 0
+    payload = failure_events[-1]["payload"]
+    assert payload["document_id"] == missing_document_id
+    assert payload["classification_label"] == "restricted"
+    assert payload["outcome"] == "failure"
+    assert payload["reason"] == "document_not_found"

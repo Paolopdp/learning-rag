@@ -4,11 +4,11 @@ from dataclasses import dataclass, field, replace
 import uuid
 
 import numpy as np
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app.config import store_backend
 from app.db import SessionLocal
-from app.models import Chunk, Document
+from app.models import Chunk, Document, DocumentMetadata
 from app.retrieval import RetrievalResult, top_k_chunks
 from app.sql_models import ChunkORM, DocumentORM
 
@@ -52,11 +52,11 @@ class InMemoryChunkStore:
         for doc in documents:
             if not doc.workspace_id:
                 raise ValueError("Document is missing workspace_id.")
-        existing_ids = {document.document_id for document in documents}
+        incoming_document_ids = {document.document_id for document in documents}
         self.documents = [
             document
             for document in self.documents
-            if document.document_id not in existing_ids
+            if document.document_id not in incoming_document_ids
         ]
         self.documents.extend(documents)
         self.chunks.extend(new_chunks)
@@ -64,19 +64,28 @@ class InMemoryChunkStore:
             return
         self.embeddings.extend([embedding.tolist() for embedding in new_embeddings])
 
-    def list_documents(self, workspace_id: str) -> list[Document]:
-        return [
+    def list_documents(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[DocumentMetadata]:
+        workspace_documents = [
             document
             for document in self.documents
             if document.workspace_id == workspace_id
         ]
+        workspace_documents.reverse()
+        page = workspace_documents[offset : offset + limit]
+        return [self._to_document_metadata(document) for document in page]
 
     def update_document_classification(
         self,
         workspace_id: str,
         document_id: str,
         classification_label: str,
-    ) -> Document | None:
+    ) -> DocumentMetadata | None:
         for index, document in enumerate(self.documents):
             if (
                 document.workspace_id == workspace_id
@@ -84,7 +93,7 @@ class InMemoryChunkStore:
             ):
                 updated = replace(document, classification_label=classification_label)
                 self.documents[index] = updated
-                return updated
+                return self._to_document_metadata(updated)
         return None
 
     def all(self, limit: int | None = None) -> list[Chunk]:
@@ -118,6 +127,18 @@ class InMemoryChunkStore:
         filtered_chunks = [self.chunks[index] for index in indices]
         filtered_embeddings = np.array([self.embeddings[index] for index in indices])
         return top_k_chunks(filtered_chunks, filtered_embeddings, query_embedding, top_k=top_k)
+
+    @staticmethod
+    def _to_document_metadata(document: Document) -> DocumentMetadata:
+        return DocumentMetadata(
+            document_id=document.document_id,
+            workspace_id=document.workspace_id,
+            title=document.title,
+            source_url=document.source_url,
+            license=document.license,
+            accessed_at=document.accessed_at,
+            classification_label=document.classification_label,
+        )
 
 
 @dataclass
@@ -192,34 +213,59 @@ class PostgresChunkStore:
                 )
             session.commit()
 
-    def list_documents(self, workspace_id: str) -> list[Document]:
+    def list_documents(
+        self,
+        workspace_id: str,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[DocumentMetadata]:
         with SessionLocal() as session:
             rows = session.execute(
-                select(DocumentORM)
+                select(
+                    DocumentORM.id,
+                    DocumentORM.workspace_id,
+                    DocumentORM.title,
+                    DocumentORM.source_url,
+                    DocumentORM.license,
+                    DocumentORM.accessed_at,
+                    DocumentORM.classification_label,
+                )
                 .where(DocumentORM.workspace_id == uuid.UUID(workspace_id))
                 .order_by(DocumentORM.created_at.desc())
-            ).scalars().all()
-            return [self._to_document(row) for row in rows]
+                .limit(limit)
+                .offset(offset)
+            ).all()
+            return [self._to_document_metadata_from_row(row) for row in rows]
 
     def update_document_classification(
         self,
         workspace_id: str,
         document_id: str,
         classification_label: str,
-    ) -> Document | None:
+    ) -> DocumentMetadata | None:
         with SessionLocal() as session:
             row = session.execute(
-                select(DocumentORM).where(
+                update(DocumentORM)
+                .where(
                     DocumentORM.workspace_id == uuid.UUID(workspace_id),
                     DocumentORM.id == uuid.UUID(document_id),
                 )
-            ).scalar_one_or_none()
+                .values(classification_label=classification_label)
+                .returning(
+                    DocumentORM.id,
+                    DocumentORM.workspace_id,
+                    DocumentORM.title,
+                    DocumentORM.source_url,
+                    DocumentORM.license,
+                    DocumentORM.accessed_at,
+                    DocumentORM.classification_label,
+                )
+            ).first()
             if row is None:
                 return None
-            row.classification_label = classification_label
             session.commit()
-            session.refresh(row)
-            return self._to_document(row)
+            return self._to_document_metadata_from_row(row)
 
     def all(self, limit: int | None = None) -> list[Chunk]:
         with SessionLocal() as session:
@@ -279,15 +325,14 @@ class PostgresChunkStore:
         )
 
     @staticmethod
-    def _to_document(row: DocumentORM) -> Document:
-        return Document(
+    def _to_document_metadata_from_row(row) -> DocumentMetadata:
+        return DocumentMetadata(
             document_id=str(row.id),
             workspace_id=str(row.workspace_id),
             title=row.title,
             source_url=row.source_url,
             license=row.license,
             accessed_at=row.accessed_at,
-            text=row.text,
             classification_label=row.classification_label,
         )
 

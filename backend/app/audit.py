@@ -54,6 +54,8 @@ def log_event(
             return
 
     safe_payload = _sanitize_payload(payload)
+    if "outcome" not in safe_payload:
+        safe_payload["outcome"] = "success"
 
     try:
         with SessionLocal() as session:
