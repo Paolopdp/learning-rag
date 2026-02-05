@@ -29,11 +29,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["workspace_id"], ["workspaces.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="SET NULL"),
     )
-    op.create_index("ix_audit_logs_workspace_id", "audit_logs", ["workspace_id"])
-    op.create_index("ix_audit_logs_created_at", "audit_logs", ["created_at"])
+    op.execute(
+        "CREATE INDEX ix_audit_logs_workspace_created_at "
+        "ON audit_logs (workspace_id, created_at DESC)"
+    )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_audit_logs_created_at", table_name="audit_logs")
-    op.drop_index("ix_audit_logs_workspace_id", table_name="audit_logs")
+    op.drop_index("ix_audit_logs_workspace_created_at", table_name="audit_logs")
     op.drop_table("audit_logs")
