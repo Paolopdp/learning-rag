@@ -128,6 +128,20 @@ class InMemoryChunkStore:
         filtered_embeddings = np.array([self.embeddings[index] for index in indices])
         return top_k_chunks(filtered_chunks, filtered_embeddings, query_embedding, top_k=top_k)
 
+    def get_document_classification_map(
+        self,
+        workspace_id: str,
+        document_ids: list[str],
+    ) -> dict[str, str]:
+        requested_ids = set(document_ids)
+        if not requested_ids:
+            return {}
+        return {
+            document.document_id: document.classification_label
+            for document in self.documents
+            if document.workspace_id == workspace_id and document.document_id in requested_ids
+        }
+
     @staticmethod
     def _to_document_metadata(document: Document) -> DocumentMetadata:
         return DocumentMetadata(
@@ -309,6 +323,26 @@ class PostgresChunkStore:
                 score = 1.0 - float(dist)
                 output.append(RetrievalResult(chunk=self._to_chunk(row), score=score))
             return output
+
+    def get_document_classification_map(
+        self,
+        workspace_id: str,
+        document_ids: list[str],
+    ) -> dict[str, str]:
+        if not document_ids:
+            return {}
+        document_uuids = [uuid.UUID(document_id) for document_id in document_ids]
+        with SessionLocal() as session:
+            rows = session.execute(
+                select(DocumentORM.id, DocumentORM.classification_label).where(
+                    DocumentORM.workspace_id == uuid.UUID(workspace_id),
+                    DocumentORM.id.in_(document_uuids),
+                )
+            ).all()
+        return {
+            str(row.id): row.classification_label
+            for row in rows
+        }
 
     @staticmethod
     def _to_chunk(row: ChunkORM) -> Chunk:

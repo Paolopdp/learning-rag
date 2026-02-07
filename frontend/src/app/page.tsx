@@ -158,7 +158,10 @@ export default function Home() {
 
   const canUseApi = Boolean(token && workspace);
 
-  const fetchWorkspaces = async (accessToken: string) => {
+  const fetchWorkspaces = async (
+    accessToken: string,
+    preferredWorkspaceId: string | null = null
+  ) => {
     const response = await fetch(`${API_BASE}/workspaces`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
@@ -167,7 +170,10 @@ export default function Home() {
     }
     const payload = (await response.json()) as Workspace[];
     setWorkspaces(payload);
-    const selected = payload[0] ?? null;
+    const selected =
+      payload.find((candidate) => candidate.id === preferredWorkspaceId) ??
+      payload[0] ??
+      null;
     setWorkspace(selected);
     return selected;
   };
@@ -463,8 +469,6 @@ export default function Home() {
       const payload = (await response.json()) as AuthResponse;
       setToken(payload.access_token);
       setCurrentUser(payload.user);
-      setWorkspace(payload.default_workspace);
-      setWorkspaces(payload.default_workspace ? [payload.default_workspace] : []);
       setIngestInfo(null);
       setAnswer("");
       setCitations([]);
@@ -473,12 +477,16 @@ export default function Home() {
       setDocumentOffset(0);
       setHasMoreDocuments(false);
       setMembers([]);
-      if (payload.default_workspace) {
-        await loadAudit(payload.access_token, payload.default_workspace.id);
-        await loadDocuments(payload.access_token, payload.default_workspace.id, {
+      const selected = await fetchWorkspaces(
+        payload.access_token,
+        payload.default_workspace?.id ?? null
+      );
+      if (selected) {
+        await loadAudit(payload.access_token, selected.id);
+        await loadDocuments(payload.access_token, selected.id, {
           offset: 0,
         });
-        await loadMembers(payload.access_token, payload.default_workspace.id);
+        await loadMembers(payload.access_token, selected.id);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Registration failed.");
@@ -508,21 +516,16 @@ export default function Home() {
       setDocumentOffset(0);
       setHasMoreDocuments(false);
       setMembers([]);
-      if (payload.default_workspace) {
-        setWorkspace(payload.default_workspace);
-        setWorkspaces([payload.default_workspace]);
-        await loadAudit(payload.access_token, payload.default_workspace.id);
-        await loadDocuments(payload.access_token, payload.default_workspace.id, {
+      const selected = await fetchWorkspaces(
+        payload.access_token,
+        payload.default_workspace?.id ?? null
+      );
+      if (selected) {
+        await loadAudit(payload.access_token, selected.id);
+        await loadDocuments(payload.access_token, selected.id, {
           offset: 0,
         });
-        await loadMembers(payload.access_token, payload.default_workspace.id);
-      } else {
-        const selected = await fetchWorkspaces(payload.access_token);
-        await loadAudit(payload.access_token, selected?.id ?? null);
-        await loadDocuments(payload.access_token, selected?.id ?? null, {
-          offset: 0,
-        });
-        await loadMembers(payload.access_token, selected?.id ?? null);
+        await loadMembers(payload.access_token, selected.id);
       }
       setIngestInfo(null);
       setAnswer("");
@@ -599,6 +602,24 @@ export default function Home() {
     } finally {
       setBusyQuery(false);
     }
+  };
+
+  const handleWorkspaceSelect = async (workspaceId: string) => {
+    if (!token) {
+      return;
+    }
+    const selected = workspaces.find((candidate) => candidate.id === workspaceId);
+    if (!selected) {
+      return;
+    }
+    setWorkspace(selected);
+    setError(null);
+    setIngestInfo(null);
+    setAnswer("");
+    setCitations([]);
+    await loadAudit(token, selected.id);
+    await loadDocuments(token, selected.id, { offset: 0 });
+    await loadMembers(token, selected.id);
   };
 
   return (
@@ -697,6 +718,24 @@ export default function Home() {
                   </span>
                 </div>
               </div>
+              {token && workspaces.length > 0 ? (
+                <div>
+                  <label className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                    Active Workspace
+                  </label>
+                  <select
+                    value={workspace?.id ?? ""}
+                    onChange={(event) => handleWorkspaceSelect(event.target.value)}
+                    className="mt-2 w-full rounded-2xl border border-[color:var(--border)] bg-white px-4 py-2 text-sm"
+                  >
+                    {workspaces.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        {candidate.name} ({candidate.role})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : null}
               {workspaces.length > 1 ? (
                 <div className="text-xs text-[color:var(--muted)]">
                   {workspaces.length} workspaces available.

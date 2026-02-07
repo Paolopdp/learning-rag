@@ -24,6 +24,16 @@ This project includes a minimal governance baseline focused on traceability and 
   `PATCH /workspaces/{workspace_id}/documents/{document_id}/classification`
 - Allowed labels: `public`, `internal`, `confidential`, `restricted`
 - Default label at ingestion: `internal`
+- Query policy enforcement:
+  - `admin`: can retrieve all labels.
+  - `member`: can retrieve only `public` and `internal`.
+  - Unknown roles are denied by default except `public`.
+- Query audit payload includes policy fields:
+  - `access_role`
+  - `allowed_classification_labels`
+  - `candidate_results`
+  - `filtered_by_policy`
+  - `filtered_missing_metadata`
 
 ## Workspace member management
 - Members endpoint: `GET /workspaces/{workspace_id}/members`

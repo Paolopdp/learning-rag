@@ -39,6 +39,20 @@ chunk_store = get_chunk_store()
 
 DEFAULT_DOCUMENTS_LIMIT = 50
 MAX_DOCUMENTS_LIMIT = 200
+MAX_QUERY_POLICY_CANDIDATES = 100
+QUERY_POLICY_CANDIDATE_MULTIPLIER = 5
+
+CLASSIFICATION_PUBLIC = "public"
+CLASSIFICATION_INTERNAL = "internal"
+CLASSIFICATION_CONFIDENTIAL = "confidential"
+CLASSIFICATION_RESTRICTED = "restricted"
+
+ALL_CLASSIFICATION_LABELS = {
+    CLASSIFICATION_PUBLIC,
+    CLASSIFICATION_INTERNAL,
+    CLASSIFICATION_CONFIDENTIAL,
+    CLASSIFICATION_RESTRICTED,
+}
 
 configure_otel(app)
 
@@ -115,6 +129,15 @@ def require_workspace_exists(session, workspace_uuid: uuid.UUID) -> None:
         raise HTTPException(status_code=404, detail="Workspace not found.")
 
 
+def allowed_labels_for_role(role: str) -> set[str]:
+    if role == "admin":
+        return ALL_CLASSIFICATION_LABELS
+    if role == "member":
+        return {CLASSIFICATION_PUBLIC, CLASSIFICATION_INTERNAL}
+    logger.warning("Unknown workspace role for query policy: role=%s", role)
+    return {CLASSIFICATION_PUBLIC}
+
+
 @app.post("/auth/register", response_model=AuthResponse)
 def register(payload: RegisterRequest) -> AuthResponse:
     with SessionLocal() as session:
@@ -177,6 +200,7 @@ def login(payload: LoginRequest) -> AuthResponse:
             select(WorkspaceORM, WorkspaceMemberORM.role)
             .join(WorkspaceMemberORM, WorkspaceMemberORM.workspace_id == WorkspaceORM.id)
             .where(WorkspaceMemberORM.user_id == user.id)
+            .order_by(WorkspaceMemberORM.created_at.asc())
             .limit(1)
         ).first()
 
@@ -217,6 +241,7 @@ def list_workspaces(current_user: UserContext = Depends(get_current_user)) -> li
             select(WorkspaceORM, WorkspaceMemberORM.role)
             .join(WorkspaceMemberORM, WorkspaceMemberORM.workspace_id == WorkspaceORM.id)
             .where(WorkspaceMemberORM.user_id == uuid.UUID(current_user.id))
+            .order_by(WorkspaceMemberORM.created_at.asc())
         ).all()
         return [
             WorkspaceOut(id=str(workspace.id), name=workspace.name, role=role)
@@ -518,20 +543,65 @@ def query(
     current_user: UserContext = Depends(get_current_user),
 ) -> QueryResponse:
     require_workspace_uuid(workspace_id)
-    require_workspace_role(workspace_id, current_user)
+    role = require_workspace_role(workspace_id, current_user)
+    allowed_labels = allowed_labels_for_role(role)
 
     if not chunk_store.has_workspace_data(workspace_id):
         raise HTTPException(status_code=400, detail="No data ingested yet.")
 
     query_embedding = embed_text(request.question)
-    results = chunk_store.search(
-        query_embedding, top_k=request.top_k, workspace_id=workspace_id
+    candidate_limit = min(
+        MAX_QUERY_POLICY_CANDIDATES,
+        max(request.top_k, request.top_k * QUERY_POLICY_CANDIDATE_MULTIPLIER),
     )
+    results = chunk_store.search(
+        query_embedding,
+        top_k=candidate_limit,
+        workspace_id=workspace_id,
+    )
+    candidate_results = len(results)
+    filtered_by_policy = 0
+    filtered_missing_metadata = 0
 
-    if not results:
+    document_ids = sorted({result.chunk.document_id for result in results})
+    classification_by_document_id = chunk_store.get_document_classification_map(
+        workspace_id,
+        document_ids,
+    )
+    authorized_results = []
+    for result in results:
+        classification_label = classification_by_document_id.get(result.chunk.document_id)
+        if classification_label is None:
+            filtered_missing_metadata += 1
+            continue
+        if classification_label not in allowed_labels:
+            filtered_by_policy += 1
+            continue
+        authorized_results.append(result)
+        if len(authorized_results) >= request.top_k:
+            break
+
+    if not authorized_results:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="query",
+            payload={
+                "top_k": request.top_k,
+                "candidate_results": candidate_results,
+                "results": 0,
+                "filtered_by_policy": filtered_by_policy,
+                "filtered_missing_metadata": filtered_missing_metadata,
+                "policy_enforced": True,
+                "allowed_classification_labels": sorted(allowed_labels),
+                "access_role": role,
+                "llm_used": False,
+                "outcome": "success",
+            },
+        )
         return QueryResponse(answer="Nessun risultato.", citations=[])
 
-    top_chunks = [result.chunk for result in results]
+    top_chunks = [result.chunk for result in authorized_results]
     if llm_enabled():
         try:
             answer = generate_answer(request.question, top_chunks)
@@ -546,8 +616,15 @@ def query(
         action="query",
         payload={
             "top_k": request.top_k,
-            "results": len(results),
+            "candidate_results": candidate_results,
+            "results": len(authorized_results),
+            "filtered_by_policy": filtered_by_policy,
+            "filtered_missing_metadata": filtered_missing_metadata,
+            "policy_enforced": True,
+            "allowed_classification_labels": sorted(allowed_labels),
+            "access_role": role,
             "llm_used": llm_enabled(),
+            "outcome": "success",
         },
     )
 
@@ -559,7 +636,7 @@ def query(
             "score": result.score,
             "excerpt": result.chunk.content[:200],
         }
-        for result in results
+        for result in authorized_results
     ]
     return QueryResponse(answer=answer, citations=citations)
 

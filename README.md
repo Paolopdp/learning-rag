@@ -221,8 +221,8 @@ pytest
 - Golden queries: `data/golden_queries.md`
 
 ## Roadmap (Short)
-- Add policy checks tied to document classification labels.
-- Expand governance UI and enforcement views.
+- Expand governance UI to surface policy-filtered retrieval behavior.
+- Add dedicated evaluation scenarios for label-based policy enforcement.
 - Extend security/eval tooling in CI.
 
 ## Notes
