@@ -37,6 +37,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Gitleaks scans commit ranges; shallow clones or merge refs can miss head/parent commits.
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Gitleaks
         uses: gitleaks/gitleaks-action@v2
