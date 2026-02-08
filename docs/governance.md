@@ -62,6 +62,9 @@ This project includes a minimal governance baseline focused on traceability and 
 # Run backend with postgres + migrations
 ./scripts/launch_backend.sh
 
+# In another terminal, run end-to-end role policy smoke test
+./scripts/smoke_query_policy_roles.sh
+
 # Generate events
 curl -X POST http://127.0.0.1:8000/auth/register \
   -H "Content-Type: application/json" \

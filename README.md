@@ -70,6 +70,11 @@ To reset the DB before the smoke test:
 SMOKE_DB_RESET=1 ./scripts/smoke_postgres.sh
 ```
 
+Role-policy smoke test (run while backend is up):
+```bash
+./scripts/smoke_query_policy_roles.sh
+```
+
 ## Demo: Ingest + Query
 ```bash
 # Register a user (creates a default workspace)

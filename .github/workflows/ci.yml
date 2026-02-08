@@ -29,6 +29,68 @@ jobs:
       - name: Run tests
         run: python -m pytest
 
+  policy-smoke:
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: rag
+          POSTGRES_PASSWORD: rag
+          POSTGRES_DB: rag
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U rag -d rag"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      RAG_STORE: postgres
+      RAG_DATABASE_URL: postgresql+psycopg://rag:rag@127.0.0.1:5432/rag
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        run: uv pip install --system -e "backend/.[dev]"
+
+      - name: Run migrations
+        working-directory: backend
+        run: alembic upgrade head
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/rag-backend.log 2>&1 &
+
+      - name: Wait for backend health
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to become healthy."
+          cat /tmp/rag-backend.log
+          exit 1
+
+      - name: Run role-policy smoke script
+        run: ./scripts/smoke_query_policy_roles.sh
+
+      - name: Show backend log on failure
+        if: failure()
+        run: cat /tmp/rag-backend.log
+
   security:
     runs-on: ubuntu-latest
     permissions:
