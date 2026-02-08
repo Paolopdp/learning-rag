@@ -207,6 +207,9 @@ The CI pipeline runs:
 - `syft` (SBOM generation)
 - `promptfoo` eval (non-blocking baseline while assertions stabilize)
 
+Nightly LLM security workflow:
+- `garak` scan against `/query` (non-blocking baseline, artifact uploaded as `garak-results`)
+
 ## Tests
 Preferred (scripted):
 ```bash
@@ -240,6 +243,29 @@ Node runtime note:
 
 Output artifact:
 - `artifacts/promptfoo/results.json`
+
+## LLM Security Scan (Garak)
+Run a minimal garak scan against the local `/query` endpoint:
+```bash
+cd backend
+source .venv/bin/activate
+RAG_AUTH_DISABLED=1 RAG_USE_LLM=0 RAG_EMBEDDING_BACKEND=hash uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+```bash
+cd backend
+source .venv/bin/activate
+uv pip install "garak==0.13.2"
+cd ..
+./scripts/run_garak_scan.sh
+```
+
+Output artifacts:
+- `artifacts/garak/garak-console.log`
+- `artifacts/garak/rest_generator_options.json`
+- `artifacts/garak/garak_run_config.yaml`
+- `artifacts/garak/*` (garak report files)
 
 ## Demo Dataset
 - Italian Wikipedia excerpts in `data/wikipedia_it/`

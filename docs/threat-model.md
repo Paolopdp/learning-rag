@@ -45,15 +45,16 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 | TM-09 | Retrieval policy bypass due to post-filter truncation | Policy applied in retrieval selection (`allowed_labels` passed to store search) | `backend/tests/test_query_policy.py::test_query_member_still_gets_allowed_results_with_many_forbidden_chunks`, `backend/tests/test_query_policy.py::test_query_filters_restricted_chunks_for_member` | Mitigated (MVP) | Add larger corpus perf+correctness benchmarks. |
 | TM-10 | Governance lockout by removing/demoting last admin | Last-admin protection in role update/remove endpoints | `backend/tests/test_workspace_members.py::test_update_workspace_member_role_blocks_last_admin`, `backend/tests/test_workspace_members.py::test_remove_workspace_member_blocks_last_admin` | Mitigated (MVP) | Add incident runbook for admin recovery in docs. |
 | TM-11 | Secret leakage or vulnerable dependency in repo/CI | CI includes Gitleaks, Trivy, OSV-Scanner, Syft; CodeQL workflow present | `.github/workflows/ci.yml`, `.github/workflows/codeql.yml` | Mitigated (baseline) | Add policy for fail thresholds and artifact retention. |
+| TM-13 | LLM-specific attack regressions (prompt injection/jailbreak classes) go undetected | Nightly/manual non-blocking `garak` scan against `/query`; promptfoo baseline assertions in CI | `.github/workflows/llm-security.yml`, `.github/workflows/ci.yml`, `scripts/run_garak_scan.sh`, `scripts/run_promptfoo_eval.sh` | Partially mitigated | Tighten probes and make selected checks blocking after baseline stabilization. |
 | TM-12 | Audit gaps due to best-effort logging failure path | Logging failure does not block business flow (availability-first) and warnings are emitted | `backend/app/audit.py` behavior | Accepted risk | Add retry/dead-letter strategy if stronger audit durability is required. |
 
 ## Known Gaps (Planned)
 - Prompt injection hardening and output handling guardrails are not yet implemented.
 - PII detection/anonymization pipeline is not yet implemented.
-- Automated evaluation/security stacks (`promptfoo`, `garak`) are not yet integrated.
+- Promptfoo and garak are integrated as non-blocking baselines; strict blocking policy is not yet enforced.
 - Rate limiting and abuse controls are not yet implemented.
 - Ingestion is demo-dataset based (`/ingest/demo`), not full upload/PDF pipeline yet.
 
 ## Next Security/Eval Steps
-- Step 2: `promptfoo` evaluation config and non-blocking CI checks are now in place; next move is defining blocking thresholds.
-- Step 3: add `garak` security scanning job (non-blocking/nightly first).
+- Define blocking thresholds/escalation policy for promptfoo and garak (current mode is non-blocking).
+- Expand garak probe coverage and map findings to remediation runbooks.

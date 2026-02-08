@@ -62,6 +62,11 @@ This project includes a minimal governance baseline focused on traceability and 
 - Runner: `scripts/run_promptfoo_eval.sh`
 - Current CI mode: non-blocking baseline job (`promptfoo-eval`) with JSON artifact upload.
 
+## LLM Security Testing (Garak)
+- Runner: `scripts/run_garak_scan.sh`
+- Current CI mode: non-blocking nightly/manual workflow (`.github/workflows/llm-security.yml`)
+- Artifact: `garak-results`
+
 ## Local verification
 ```bash
 # Run backend with postgres + migrations
