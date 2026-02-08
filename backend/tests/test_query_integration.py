@@ -36,6 +36,10 @@ def test_query_returns_citations_for_golden_queries() -> None:
 
         assert payload["answer"]
         assert payload["citations"]
+        assert payload["policy"]["policy_enforced"] is True
+        assert payload["policy"]["policy_filtering_mode"] == "in_retrieval"
+        assert payload["policy"]["access_role"] in {"admin", "member"}
+        assert payload["policy"]["candidate_results"] >= payload["policy"]["returned_results"]
         titles = {c["source_title"] for c in payload["citations"]}
         assert any(expected in titles for expected in expected_titles)
 
