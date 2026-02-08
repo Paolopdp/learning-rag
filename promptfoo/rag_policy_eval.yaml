@@ -1,0 +1,106 @@
+description: "RAG golden-query eval (citations + policy metadata)"
+
+prompts:
+  - "{{question}}"
+
+providers:
+  - id: https
+    config:
+      url: "http://127.0.0.1:8000/workspaces/11111111-1111-1111-1111-111111111111/query"
+      method: POST
+      headers:
+        Content-Type: application/json
+      body:
+        question: "{{prompt}}"
+        top_k: 3
+      transformResponse: "JSON.stringify(json)"
+
+tests:
+  - vars:
+      question: "Che cos'e SPID e a cosa serve?"
+    assert:
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return typeof payload.answer === "string" && payload.answer.trim().length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return Array.isArray(payload.citations) && payload.citations.length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          const policy = payload.policy || {};
+          return (
+            policy.policy_enforced === true &&
+            policy.policy_filtering_mode === "in_retrieval" &&
+            Array.isArray(policy.allowed_classification_labels) &&
+            policy.allowed_classification_labels.length > 0 &&
+            typeof policy.access_role === "string" &&
+            Number.isInteger(policy.returned_results)
+          );
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          if (!Array.isArray(payload.citations) || payload.citations.length === 0) {
+            return false;
+          }
+          const answerWords = String(payload.answer || "")
+            .toLowerCase()
+            .split(/[^a-z0-9]+/)
+            .filter((word) => word.length >= 5);
+          if (answerWords.length === 0) {
+            return false;
+          }
+          const excerpts = payload.citations
+            .map((citation) => String(citation.excerpt || "").toLowerCase())
+            .join(" ");
+          return answerWords.some((word) => excerpts.includes(word));
+
+  - vars:
+      question: "Qual e il ruolo di PagoPA?"
+    assert:
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return typeof payload.answer === "string" && payload.answer.trim().length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return Array.isArray(payload.citations) && payload.citations.length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          const policy = payload.policy || {};
+          return (
+            policy.policy_enforced === true &&
+            policy.policy_filtering_mode === "in_retrieval" &&
+            Array.isArray(policy.allowed_classification_labels) &&
+            policy.allowed_classification_labels.length > 0 &&
+            typeof policy.access_role === "string" &&
+            Number.isInteger(policy.returned_results)
+          );
+
+  - vars:
+      question: "Cos'e l'ANPR e come si collega al Codice dell'amministrazione digitale?"
+    assert:
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return typeof payload.answer === "string" && payload.answer.trim().length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          return Array.isArray(payload.citations) && payload.citations.length > 0;
+      - type: javascript
+        value: |
+          const payload = JSON.parse(output);
+          const policy = payload.policy || {};
+          return (
+            policy.policy_enforced === true &&
+            policy.policy_filtering_mode === "in_retrieval" &&
+            Array.isArray(policy.allowed_classification_labels) &&
+            policy.allowed_classification_labels.length > 0 &&
+            typeof policy.access_role === "string" &&
+            Number.isInteger(policy.returned_results)
+          );

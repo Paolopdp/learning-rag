@@ -205,6 +205,7 @@ The CI pipeline runs:
 - `osv-scanner` (dependency vulnerabilities)
 - `trivy` (filesystem scan)
 - `syft` (SBOM generation)
+- `promptfoo` eval (non-blocking baseline while assertions stabilize)
 
 ## Tests
 Preferred (scripted):
@@ -220,6 +221,25 @@ source .venv/bin/activate
 uv pip install -e ".[dev]"
 pytest
 ```
+
+## Evaluation (Promptfoo)
+Run a minimal golden-query evaluation (answer/citations/policy checks):
+```bash
+cd backend
+RAG_AUTH_DISABLED=1 uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+```bash
+./scripts/run_promptfoo_eval.sh
+```
+
+Node runtime note:
+- `promptfoo` in this repo expects Node.js `>= 20.10` (recommended `22.x`).
+- If you see a syntax error around `with {type: 'json'}`, your Node version is too old.
+
+Output artifact:
+- `artifacts/promptfoo/results.json`
 
 ## Demo Dataset
 - Italian Wikipedia excerpts in `data/wikipedia_it/`

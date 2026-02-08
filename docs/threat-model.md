@@ -55,5 +55,5 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 - Ingestion is demo-dataset based (`/ingest/demo`), not full upload/PDF pipeline yet.
 
 ## Next Security/Eval Steps
-- Step 2: add `promptfoo` evaluation config and CI checks for grounded answers/citations/policy metadata.
+- Step 2: `promptfoo` evaluation config and non-blocking CI checks are now in place; next move is defining blocking thresholds.
 - Step 3: add `garak` security scanning job (non-blocking/nightly first).

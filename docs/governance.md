@@ -57,6 +57,11 @@ This project includes a minimal governance baseline focused on traceability and 
 - Audit logging is best-effort and must not break ingestion/query flows.
 - Invalid `workspace_id` values are rejected early with HTTP 400.
 
+## Evaluation (Promptfoo)
+- Config: `promptfoo/rag_policy_eval.yaml`
+- Runner: `scripts/run_promptfoo_eval.sh`
+- Current CI mode: non-blocking baseline job (`promptfoo-eval`) with JSON artifact upload.
+
 ## Local verification
 ```bash
 # Run backend with postgres + migrations

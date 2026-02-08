@@ -91,6 +91,66 @@ jobs:
         if: failure()
         run: cat /tmp/rag-backend.log
 
+  promptfoo-eval:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RAG_AUTH_DISABLED: "1"
+      RAG_USE_LLM: "0"
+      RAG_EMBEDDING_BACKEND: hash
+      RAG_OTEL_ENABLED: "0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install backend dependencies
+        run: uv pip install --system -e "backend/.[dev]"
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Start backend
+        working-directory: backend
+        run: |
+          nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 >/tmp/rag-promptfoo-backend.log 2>&1 &
+
+      - name: Wait for backend health
+        run: |
+          for attempt in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend failed to become healthy."
+          cat /tmp/rag-promptfoo-backend.log
+          exit 1
+
+      - name: Run promptfoo eval
+        run: ./scripts/run_promptfoo_eval.sh
+
+      - name: Upload promptfoo artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-results
+          path: artifacts/promptfoo/results.json
+          if-no-files-found: warn
+
+      - name: Show backend log on failure
+        if: failure()
+        run: cat /tmp/rag-promptfoo-backend.log
+
   security:
     runs-on: ubuntu-latest
     permissions:
