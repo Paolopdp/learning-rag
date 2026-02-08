@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import logging
 import uuid
 
 import numpy as np
@@ -11,6 +12,8 @@ from app.db import SessionLocal
 from app.models import Chunk, Document, DocumentMetadata
 from app.retrieval import RetrievalResult, top_k_chunks
 from app.sql_models import ChunkORM, DocumentORM
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -114,13 +117,30 @@ class InMemoryChunkStore:
         query_embedding: np.ndarray,
         top_k: int = 3,
         workspace_id: str | None = None,
+        allowed_labels: set[str] | None = None,
     ) -> list[RetrievalResult]:
         if workspace_id is None:
             return []
+        allowed_document_ids: set[str] | None = None
+        if allowed_labels is not None:
+            allowed_document_ids = {
+                document.document_id
+                for document in self.documents
+                if (
+                    document.workspace_id == workspace_id
+                    and document.classification_label in allowed_labels
+                )
+            }
         indices = [
             index
             for index, chunk in enumerate(self.chunks)
-            if chunk.workspace_id == workspace_id
+            if (
+                chunk.workspace_id == workspace_id
+                and (
+                    allowed_document_ids is None
+                    or chunk.document_id in allowed_document_ids
+                )
+            )
         ]
         if not indices:
             return []
@@ -303,6 +323,7 @@ class PostgresChunkStore:
         query_embedding: np.ndarray,
         top_k: int = 3,
         workspace_id: str | None = None,
+        allowed_labels: set[str] | None = None,
     ) -> list[RetrievalResult]:
         if query_embedding.size == 0:
             return []
@@ -313,10 +334,12 @@ class PostgresChunkStore:
             distance = ChunkORM.embedding.cosine_distance(query_vec)
             stmt = (
                 select(ChunkORM, distance.label("distance"))
+                .join(DocumentORM, DocumentORM.id == ChunkORM.document_id)
                 .where(ChunkORM.workspace_id == uuid.UUID(workspace_id))
-                .order_by(distance)
-                .limit(top_k)
             )
+            if allowed_labels is not None:
+                stmt = stmt.where(DocumentORM.classification_label.in_(sorted(allowed_labels)))
+            stmt = stmt.order_by(distance).limit(top_k)
             results = session.execute(stmt).all()
             output: list[RetrievalResult] = []
             for row, dist in results:
@@ -331,7 +354,23 @@ class PostgresChunkStore:
     ) -> dict[str, str]:
         if not document_ids:
             return {}
-        document_uuids = [uuid.UUID(document_id) for document_id in document_ids]
+        document_uuids: list[uuid.UUID] = []
+        invalid_document_ids: list[str] = []
+        for document_id in document_ids:
+            try:
+                document_uuids.append(uuid.UUID(document_id))
+            except ValueError:
+                invalid_document_ids.append(document_id)
+        if invalid_document_ids:
+            logger.warning(
+                "store_invalid_document_ids_in_classification_map",
+                extra={
+                    "workspace_id": workspace_id,
+                    "invalid_document_id_count": len(invalid_document_ids),
+                },
+            )
+        if not document_uuids:
+            return {}
         with SessionLocal() as session:
             rows = session.execute(
                 select(DocumentORM.id, DocumentORM.classification_label).where(

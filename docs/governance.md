@@ -32,8 +32,7 @@ This project includes a minimal governance baseline focused on traceability and 
   - `access_role`
   - `allowed_classification_labels`
   - `candidate_results`
-  - `filtered_by_policy`
-  - `filtered_missing_metadata`
+  - `policy_filtering_mode` (`in_retrieval`)
 
 ## Workspace member management
 - Members endpoint: `GET /workspaces/{workspace_id}/members`

@@ -39,8 +39,6 @@ chunk_store = get_chunk_store()
 
 DEFAULT_DOCUMENTS_LIMIT = 50
 MAX_DOCUMENTS_LIMIT = 200
-MAX_QUERY_POLICY_CANDIDATES = 100
-QUERY_POLICY_CANDIDATE_MULTIPLIER = 5
 
 CLASSIFICATION_PUBLIC = "public"
 CLASSIFICATION_INTERNAL = "internal"
@@ -134,7 +132,13 @@ def allowed_labels_for_role(role: str) -> set[str]:
         return ALL_CLASSIFICATION_LABELS
     if role == "member":
         return {CLASSIFICATION_PUBLIC, CLASSIFICATION_INTERNAL}
-    logger.warning("Unknown workspace role for query policy: role=%s", role)
+    logger.warning(
+        "query_policy_unknown_workspace_role",
+        extra={
+            "role": role,
+            "fallback_allowed_labels": [CLASSIFICATION_PUBLIC],
+        },
+    )
     return {CLASSIFICATION_PUBLIC}
 
 
@@ -550,38 +554,15 @@ def query(
         raise HTTPException(status_code=400, detail="No data ingested yet.")
 
     query_embedding = embed_text(request.question)
-    candidate_limit = min(
-        MAX_QUERY_POLICY_CANDIDATES,
-        max(request.top_k, request.top_k * QUERY_POLICY_CANDIDATE_MULTIPLIER),
-    )
     results = chunk_store.search(
         query_embedding,
-        top_k=candidate_limit,
+        top_k=request.top_k,
         workspace_id=workspace_id,
+        allowed_labels=allowed_labels,
     )
     candidate_results = len(results)
-    filtered_by_policy = 0
-    filtered_missing_metadata = 0
 
-    document_ids = sorted({result.chunk.document_id for result in results})
-    classification_by_document_id = chunk_store.get_document_classification_map(
-        workspace_id,
-        document_ids,
-    )
-    authorized_results = []
-    for result in results:
-        classification_label = classification_by_document_id.get(result.chunk.document_id)
-        if classification_label is None:
-            filtered_missing_metadata += 1
-            continue
-        if classification_label not in allowed_labels:
-            filtered_by_policy += 1
-            continue
-        authorized_results.append(result)
-        if len(authorized_results) >= request.top_k:
-            break
-
-    if not authorized_results:
+    if not results:
         log_event(
             workspace_id=workspace_id,
             user_id=None if auth_disabled() else current_user.id,
@@ -590,9 +571,8 @@ def query(
                 "top_k": request.top_k,
                 "candidate_results": candidate_results,
                 "results": 0,
-                "filtered_by_policy": filtered_by_policy,
-                "filtered_missing_metadata": filtered_missing_metadata,
                 "policy_enforced": True,
+                "policy_filtering_mode": "in_retrieval",
                 "allowed_classification_labels": sorted(allowed_labels),
                 "access_role": role,
                 "llm_used": False,
@@ -601,7 +581,7 @@ def query(
         )
         return QueryResponse(answer="Nessun risultato.", citations=[])
 
-    top_chunks = [result.chunk for result in authorized_results]
+    top_chunks = [result.chunk for result in results]
     if llm_enabled():
         try:
             answer = generate_answer(request.question, top_chunks)
@@ -617,10 +597,9 @@ def query(
         payload={
             "top_k": request.top_k,
             "candidate_results": candidate_results,
-            "results": len(authorized_results),
-            "filtered_by_policy": filtered_by_policy,
-            "filtered_missing_metadata": filtered_missing_metadata,
+            "results": len(results),
             "policy_enforced": True,
+            "policy_filtering_mode": "in_retrieval",
             "allowed_classification_labels": sorted(allowed_labels),
             "access_role": role,
             "llm_used": llm_enabled(),
@@ -636,7 +615,7 @@ def query(
             "score": result.score,
             "excerpt": result.chunk.content[:200],
         }
-        for result in authorized_results
+        for result in results
     ]
     return QueryResponse(answer=answer, citations=citations)
 

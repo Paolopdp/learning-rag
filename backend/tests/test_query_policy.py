@@ -19,6 +19,7 @@ class _PolicyChunkStore:
         self._results = results
         self._classification_map = classification_map
         self.last_top_k: int | None = None
+        self.last_allowed_labels: set[str] | None = None
 
     def has_workspace_data(self, workspace_id: str) -> bool:
         return bool(self._results)
@@ -29,9 +30,18 @@ class _PolicyChunkStore:
         *,
         top_k: int,
         workspace_id: str | None,
+        allowed_labels: set[str] | None = None,
     ) -> list[RetrievalResult]:
         self.last_top_k = top_k
-        return self._results[:top_k]
+        self.last_allowed_labels = allowed_labels
+        if allowed_labels is None:
+            return self._results[:top_k]
+        filtered = [
+            result
+            for result in self._results
+            if self._classification_map.get(result.chunk.document_id) in allowed_labels
+        ]
+        return filtered[:top_k]
 
     def get_document_classification_map(
         self,
@@ -116,17 +126,17 @@ def test_query_filters_restricted_chunks_for_member(monkeypatch) -> None:
     assert response.answer == "internal chunk"
     assert len(response.citations) == 2
     assert {citation.source_title for citation in response.citations} == {"Internal", "Public"}
-    assert store.last_top_k == 10
+    assert store.last_top_k == 2
+    assert store.last_allowed_labels == {"internal", "public"}
 
     assert len(events) == 1
     assert events[0]["action"] == "query"
     payload = events[0]["payload"]
     assert payload["results"] == 2
-    assert payload["candidate_results"] == 3
-    assert payload["filtered_by_policy"] == 1
-    assert payload["filtered_missing_metadata"] == 0
+    assert payload["candidate_results"] == 2
     assert payload["access_role"] == "member"
     assert payload["allowed_classification_labels"] == ["internal", "public"]
+    assert payload["policy_filtering_mode"] == "in_retrieval"
     assert payload["outcome"] == "success"
 
 
@@ -168,7 +178,24 @@ def test_query_returns_empty_when_policy_blocks_all_results(monkeypatch) -> None
     assert len(events) == 1
     payload = events[0]["payload"]
     assert payload["results"] == 0
-    assert payload["candidate_results"] == 1
-    assert payload["filtered_by_policy"] == 1
+    assert payload["candidate_results"] == 0
+    assert payload["policy_filtering_mode"] == "in_retrieval"
     assert payload["llm_used"] is False
     assert payload["outcome"] == "success"
+
+
+def test_unknown_role_logs_structured_warning(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    monkeypatch.setattr(app_main, "logger", _FakeLogger())
+    labels = app_main.allowed_labels_for_role("viewer")
+
+    assert labels == {"public"}
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "query_policy_unknown_workspace_role"
+    assert payload["extra"]["role"] == "viewer"
