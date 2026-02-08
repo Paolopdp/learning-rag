@@ -4,9 +4,10 @@ import numpy as np
 
 from app import main as app_main
 from app.auth import UserContext
-from app.models import Chunk
+from app.models import Chunk, Document
 from app.retrieval import RetrievalResult
 from app.schemas import QueryRequest
+from app.store import InMemoryChunkStore
 
 
 class _PolicyChunkStore:
@@ -209,3 +210,95 @@ def test_unknown_role_logs_structured_warning(monkeypatch) -> None:
     message, payload = warnings[0]
     assert message == "query_policy_unknown_workspace_role"
     assert payload["extra"]["role"] == "viewer"
+
+
+def test_query_member_still_gets_allowed_results_with_many_forbidden_chunks(monkeypatch) -> None:
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    store = InMemoryChunkStore()
+
+    restricted_documents: list[Document] = [
+        Document(
+            workspace_id=workspace_id,
+            title=f"Restricted {index}",
+            source_url=None,
+            license=None,
+            accessed_at=None,
+            text=f"restricted content {index}",
+            classification_label="restricted",
+        )
+        for index in range(120)
+    ]
+    allowed_documents: list[Document] = [
+        Document(
+            workspace_id=workspace_id,
+            title=f"Allowed {index}",
+            source_url=None,
+            license=None,
+            accessed_at=None,
+            text=f"allowed content {index}",
+            classification_label="internal",
+        )
+        for index in range(4)
+    ]
+    documents = restricted_documents + allowed_documents
+
+    chunks: list[Chunk] = []
+    embeddings: list[list[float]] = []
+    for document in restricted_documents:
+        chunks.append(
+            Chunk(
+                document_id=document.document_id,
+                workspace_id=workspace_id,
+                content=document.text,
+                start_char=0,
+                end_char=len(document.text),
+                chunk_index=0,
+                source_title=document.title,
+                source_url=None,
+            )
+        )
+        # Highest similarity to the query embedding.
+        embeddings.append([1.0, 0.0])
+
+    allowed_vectors = [
+        [0.70, 0.70],
+        [0.60, 0.80],
+        [0.50, 0.86],
+        [0.40, 0.92],
+    ]
+    for document, vector in zip(allowed_documents, allowed_vectors):
+        chunks.append(
+            Chunk(
+                document_id=document.document_id,
+                workspace_id=workspace_id,
+                content=document.text,
+                start_char=0,
+                end_char=len(document.text),
+                chunk_index=0,
+                source_title=document.title,
+                source_url=None,
+            )
+        )
+        embeddings.append(vector)
+
+    store.add_many(documents, chunks, np.array(embeddings, dtype=float))
+
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0], dtype=float))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+
+    response = app_main.query(
+        workspace_id=workspace_id,
+        request=QueryRequest(question="test", top_k=3),
+        current_user=UserContext(
+            id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            email="member@local",
+        ),
+    )
+
+    assert response.answer.startswith("allowed content")
+    assert len(response.citations) == 3
+    assert all(citation.source_title.startswith("Allowed") for citation in response.citations)
+    assert response.policy.allowed_classification_labels == ["internal", "public"]
+    assert response.policy.returned_results == 3
