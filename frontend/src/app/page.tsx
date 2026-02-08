@@ -752,9 +752,20 @@ export default function Home() {
                   </select>
                 </div>
               ) : null}
-              {workspaces.length > 1 ? (
-                <div className="text-xs text-[color:var(--muted)]">
-                  {workspaces.length} workspaces available.
+              {workspaces.length > 1 && workspace ? (
+                <div className="rounded-2xl border border-[color:var(--border)] bg-[#fcfaf7] px-4 py-3 text-xs text-[color:var(--muted)]">
+                  <div className="font-semibold uppercase tracking-[0.15em] text-[color:var(--foreground)]">
+                    Multiple Workspaces
+                  </div>
+                  <div className="mt-2">
+                    {`You are viewing "${workspace.name}" as ${workspace.role}.`}
+                  </div>
+                  <div className="mt-1">
+                    Use `Active Workspace` to switch context for query, documents, members, and audit data.
+                  </div>
+                  <div className="mt-1">
+                    {`${workspaces.findIndex((candidate) => candidate.id === workspace.id) + 1} of ${workspaces.length} available workspaces.`}
+                  </div>
                 </div>
               ) : null}
             </div>
