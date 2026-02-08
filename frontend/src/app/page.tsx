@@ -34,9 +34,19 @@ type Citation = {
   excerpt: string;
 };
 
+type QueryPolicySummary = {
+  policy_enforced: boolean;
+  policy_filtering_mode: "in_retrieval";
+  access_role: string;
+  allowed_classification_labels: ClassificationLabel[];
+  candidate_results: number;
+  returned_results: number;
+};
+
 type QueryResponse = {
   answer: string;
   citations: Citation[];
+  policy: QueryPolicySummary;
 };
 
 type AuditEvent = {
@@ -109,6 +119,7 @@ export default function Home() {
   const [ingestInfo, setIngestInfo] = useState<IngestResponse | null>(null);
   const [answer, setAnswer] = useState<string>("");
   const [citations, setCitations] = useState<Citation[]>([]);
+  const [queryPolicy, setQueryPolicy] = useState<QueryPolicySummary | null>(null);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [documents, setDocuments] = useState<DocumentInventoryItem[]>([]);
   const [documentOffset, setDocumentOffset] = useState(0);
@@ -472,6 +483,7 @@ export default function Home() {
       setIngestInfo(null);
       setAnswer("");
       setCitations([]);
+      setQueryPolicy(null);
       setAuditEvents([]);
       setDocuments([]);
       setDocumentOffset(0);
@@ -530,6 +542,7 @@ export default function Home() {
       setIngestInfo(null);
       setAnswer("");
       setCitations([]);
+      setQueryPolicy(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Login failed.");
     } finally {
@@ -577,6 +590,7 @@ export default function Home() {
     setError(null);
     setAnswer("");
     setCitations([]);
+    setQueryPolicy(null);
     try {
       const response = await fetch(
         `${API_BASE}/workspaces/${workspace.id}/query`,
@@ -596,6 +610,7 @@ export default function Home() {
       const payload = (await response.json()) as QueryResponse;
       setAnswer(payload.answer);
       setCitations(payload.citations);
+      setQueryPolicy(payload.policy);
       await loadAudit(token, workspace.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Query failed.");
@@ -617,6 +632,7 @@ export default function Home() {
     setIngestInfo(null);
     setAnswer("");
     setCitations([]);
+    setQueryPolicy(null);
     await loadAudit(token, selected.id);
     await loadDocuments(token, selected.id, { offset: 0 });
     await loadMembers(token, selected.id);
@@ -831,6 +847,41 @@ export default function Home() {
                 <p className="mt-2 text-sm text-[color:var(--foreground)]">
                   {answer || "Run a query to see a response."}
                 </p>
+              </div>
+
+              <div className="rounded-2xl border border-[color:var(--border)] bg-white px-4 py-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-[color:var(--muted)]">
+                  Query Policy
+                </p>
+                {queryPolicy ? (
+                  <div className="mt-2 grid gap-2 text-sm text-[color:var(--muted)]">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Role</span>
+                      <span className="rounded-full bg-[#f9f4ee] px-2 py-1 text-xs font-semibold text-[color:var(--foreground)]">
+                        {queryPolicy.access_role}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Allowed labels</span>
+                      <span className="text-[color:var(--foreground)]">
+                        {queryPolicy.allowed_classification_labels.join(", ")}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Results returned</span>
+                      <span className="text-[color:var(--foreground)]">
+                        {queryPolicy.returned_results} / {queryPolicy.candidate_results}
+                      </span>
+                    </div>
+                    <div className="text-xs">
+                      Filtering mode: {queryPolicy.policy_filtering_mode}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-[color:var(--muted)]">
+                    Policy details will appear here after a query.
+                  </p>
+                )}
               </div>
 
               <div className="rounded-2xl border border-[color:var(--border)] bg-white px-4 py-4">

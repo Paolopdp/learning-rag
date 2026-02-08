@@ -126,6 +126,11 @@ def test_query_filters_restricted_chunks_for_member(monkeypatch) -> None:
     assert response.answer == "internal chunk"
     assert len(response.citations) == 2
     assert {citation.source_title for citation in response.citations} == {"Internal", "Public"}
+    assert response.policy.access_role == "member"
+    assert response.policy.allowed_classification_labels == ["internal", "public"]
+    assert response.policy.policy_filtering_mode == "in_retrieval"
+    assert response.policy.candidate_results == 2
+    assert response.policy.returned_results == 2
     assert store.last_top_k == 2
     assert store.last_allowed_labels == {"internal", "public"}
 
@@ -174,6 +179,11 @@ def test_query_returns_empty_when_policy_blocks_all_results(monkeypatch) -> None
 
     assert response.answer == "Nessun risultato."
     assert response.citations == []
+    assert response.policy.access_role == "member"
+    assert response.policy.allowed_classification_labels == ["internal", "public"]
+    assert response.policy.policy_filtering_mode == "in_retrieval"
+    assert response.policy.candidate_results == 0
+    assert response.policy.returned_results == 0
 
     assert len(events) == 1
     payload = events[0]["payload"]

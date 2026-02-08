@@ -28,6 +28,13 @@ This project includes a minimal governance baseline focused on traceability and 
   - `admin`: can retrieve all labels.
   - `member`: can retrieve only `public` and `internal`.
   - Unknown roles are denied by default except `public`.
+- Query API response (`POST /workspaces/{workspace_id}/query`) includes:
+  - `policy.policy_enforced`
+  - `policy.policy_filtering_mode`
+  - `policy.access_role`
+  - `policy.allowed_classification_labels`
+  - `policy.candidate_results`
+  - `policy.returned_results`
 - Query audit payload includes policy fields:
   - `access_role`
   - `allowed_classification_labels`

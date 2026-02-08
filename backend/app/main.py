@@ -561,6 +561,13 @@ def query(
         allowed_labels=allowed_labels,
     )
     candidate_results = len(results)
+    policy_summary = {
+        "policy_enforced": True,
+        "policy_filtering_mode": "in_retrieval",
+        "allowed_classification_labels": sorted(allowed_labels),
+        "access_role": role,
+        "candidate_results": candidate_results,
+    }
 
     if not results:
         log_event(
@@ -569,17 +576,20 @@ def query(
             action="query",
             payload={
                 "top_k": request.top_k,
-                "candidate_results": candidate_results,
+                **policy_summary,
                 "results": 0,
-                "policy_enforced": True,
-                "policy_filtering_mode": "in_retrieval",
-                "allowed_classification_labels": sorted(allowed_labels),
-                "access_role": role,
                 "llm_used": False,
                 "outcome": "success",
             },
         )
-        return QueryResponse(answer="Nessun risultato.", citations=[])
+        return QueryResponse(
+            answer="Nessun risultato.",
+            citations=[],
+            policy={
+                **policy_summary,
+                "returned_results": 0,
+            },
+        )
 
     top_chunks = [result.chunk for result in results]
     if llm_enabled():
@@ -596,12 +606,8 @@ def query(
         action="query",
         payload={
             "top_k": request.top_k,
-            "candidate_results": candidate_results,
+            **policy_summary,
             "results": len(results),
-            "policy_enforced": True,
-            "policy_filtering_mode": "in_retrieval",
-            "allowed_classification_labels": sorted(allowed_labels),
-            "access_role": role,
             "llm_used": llm_enabled(),
             "outcome": "success",
         },
@@ -617,7 +623,14 @@ def query(
         }
         for result in results
     ]
-    return QueryResponse(answer=answer, citations=citations)
+    return QueryResponse(
+        answer=answer,
+        citations=citations,
+        policy={
+            **policy_summary,
+            "returned_results": len(results),
+        },
+    )
 
 
 @app.get("/workspaces/{workspace_id}/documents", response_model=list[DocumentInventoryItem])

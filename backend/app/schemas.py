@@ -108,9 +108,19 @@ class Citation(BaseModel):
     excerpt: str
 
 
+class QueryPolicySummary(BaseModel):
+    policy_enforced: bool
+    policy_filtering_mode: Literal["in_retrieval"]
+    access_role: str
+    allowed_classification_labels: list[ClassificationLabel]
+    candidate_results: int = Field(ge=0)
+    returned_results: int = Field(ge=0)
+
+
 class QueryResponse(BaseModel):
     answer: str
     citations: list[Citation]
+    policy: QueryPolicySummary
 
 
 class AuditEvent(BaseModel):
