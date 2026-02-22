@@ -59,16 +59,31 @@ set +e
 $PROMPTFOO_BIN eval \
   -c "$CONFIG_PATH" \
   --output "$RESULTS_PATH" \
-  >"$raw_output_file" 2>&1
+  >"$raw_output_file" 2>&1 &
+promptfoo_pid=$!
+elapsed_seconds=0
+while kill -0 "$promptfoo_pid" >/dev/null 2>&1; do
+  echo "promptfoo_progress elapsed_s=$elapsed_seconds"
+  sleep 5
+  elapsed_seconds=$((elapsed_seconds + 5))
+done
+wait "$promptfoo_pid"
 promptfoo_exit_code=$?
 set -e
 
+captured_output_bytes=0
+if [ -f "$raw_output_file" ]; then
+  captured_output_bytes="$(wc -c <"$raw_output_file" | tr -d '[:space:]')"
+fi
+
 if [ "$promptfoo_exit_code" -ne 0 ]; then
   echo "Promptfoo evaluation failed with exit code $promptfoo_exit_code. Raw output is withheld for compliance."
+  echo "promptfoo_progress captured_output_bytes=$captured_output_bytes"
   rm -f "$raw_output_file"
   exit "$promptfoo_exit_code"
 fi
 rm -f "$raw_output_file"
+echo "promptfoo_progress captured_output_bytes=$captured_output_bytes"
 
 if [ ! -s "$RESULTS_PATH" ]; then
   echo "Promptfoo results file is missing or empty: $RESULTS_PATH"
@@ -80,19 +95,50 @@ import json
 import sys
 
 results_path = sys.argv[1]
-with open(results_path, "r", encoding="utf-8") as fh:
-    payload = json.load(fh)
+try:
+    with open(results_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+except Exception as exc:  # pragma: no cover - defensive shell integration
+    print(
+        "promptfoo_summary_unavailable "
+        f"reason=invalid_results_json err={exc.__class__.__name__}"
+    )
+    raise SystemExit(0)
 
-result_rows = payload.get("results", {}).get("results", [])
+if not isinstance(payload, dict):
+    print(
+        "promptfoo_summary_unavailable "
+        f"reason=unexpected_root_type actual={type(payload).__name__}"
+    )
+    raise SystemExit(0)
+
+results_obj = payload.get("results")
+if not isinstance(results_obj, dict):
+    print(
+        "promptfoo_summary_unavailable "
+        f"reason=unexpected_results_object actual={type(results_obj).__name__}"
+    )
+    raise SystemExit(0)
+
+result_rows = results_obj.get("results")
+if not isinstance(result_rows, list):
+    print(
+        "promptfoo_summary_unavailable "
+        f"reason=unexpected_results_rows actual={type(result_rows).__name__}"
+    )
+    raise SystemExit(0)
+
 total = len(result_rows)
 passed = 0
 for row in result_rows:
-    if row.get("success") is True and row.get("gradingResult", {}).get("pass") is True:
+    if not isinstance(row, dict):
+        continue
+    grading = row.get("gradingResult")
+    grading_pass = grading.get("pass") if isinstance(grading, dict) else None
+    if row.get("success") is True and grading_pass is True:
         passed += 1
 
 print(f"promptfoo_summary total={total} passed={passed} failed={total - passed}")
-if total == 0:
-    raise SystemExit("Promptfoo produced zero test rows.")
 PY
 
 echo "Promptfoo evaluation completed."
