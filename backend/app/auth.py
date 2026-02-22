@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-import hashlib
 import uuid
 
-import bcrypt
+from argon2 import PasswordHasher
+from argon2.exceptions import InvalidHashError, VerificationError
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -16,6 +16,7 @@ from app.db import SessionLocal
 from app.sql_models import UserORM, WorkspaceMemberORM
 
 http_bearer = HTTPBearer(auto_error=False)
+password_hasher = PasswordHasher()
 
 
 @dataclass(frozen=True)
@@ -25,17 +26,13 @@ class UserContext:
 
 
 def hash_password(password: str) -> str:
-    # Pre-hash to avoid bcrypt 72-byte limit while keeping KISS.
-    digest = hashlib.sha256(password.encode("utf-8")).digest()
-    hashed = bcrypt.hashpw(digest, bcrypt.gensalt())
-    return hashed.decode("utf-8")
+    return password_hasher.hash(password)
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    digest = hashlib.sha256(password.encode("utf-8")).digest()
     try:
-        return bcrypt.checkpw(digest, hashed.encode("utf-8"))
-    except ValueError:
+        return password_hasher.verify(hashed, password)
+    except (InvalidHashError, VerificationError):
         return False
 
 

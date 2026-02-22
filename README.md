@@ -210,6 +210,10 @@ Environment variables:
 - `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
 - `RAG_REDIS_URL` to configure Redis/Valkey endpoint for query throttling (default `redis://localhost:6379/0`)
 
+Password hashing:
+- User passwords are hashed with Argon2id (`argon2-cffi`).
+- If you are upgrading from older local data generated with the previous SHA-256+bcrypt pre-hash flow, recreate local users (or reset local DB) once.
+
 Optional Presidio backend install:
 ```bash
 cd backend
