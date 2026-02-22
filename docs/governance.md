@@ -60,7 +60,12 @@ This project includes a minimal governance baseline focused on traceability and 
 ## Evaluation (Promptfoo)
 - Config: `promptfoo/rag_policy_eval.yaml`
 - Runner: `scripts/run_promptfoo_eval.sh`
-- Current CI mode: non-blocking baseline job (`promptfoo-eval`) with JSON artifact upload.
+- Current CI mode: blocking core-invariant gate (`promptfoo-eval`) with JSON artifact upload.
+- Gate validator: `scripts/check_promptfoo_results.py` (requires all rows pass and return HTTP 200).
+
+## Evaluation Gate Policy
+- Gate levels and promotion rules are documented in `docs/eval-gates.md`.
+- Current blocking gates include tests, policy smoke, promptfoo core invariants, and security scans.
 
 ## Query Security Testing (Garak Baseline)
 - Runner: `scripts/run_garak_scan.sh`

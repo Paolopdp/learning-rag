@@ -205,7 +205,9 @@ The CI pipeline runs:
 - `osv-scanner` (dependency vulnerabilities)
 - `trivy` (filesystem scan)
 - `syft` (SBOM generation)
-- `promptfoo` eval (non-blocking baseline while assertions stabilize)
+- `promptfoo` eval (blocking on core invariants: pass rows + HTTP 200)
+
+Evaluation gate policy reference: `docs/eval-gates.md`.
 
 Security scan workflows:
 - Query baseline: `garak` scan against `/query` in retrieval mode (`RAG_USE_LLM=0`, non-blocking, artifact `garak-summary`) via `.github/workflows/llm-security.yml`
@@ -244,6 +246,9 @@ Node runtime note:
 
 Output artifact:
 - `artifacts/promptfoo/results.json`
+
+CI gate:
+- `promptfoo-eval` is blocking and validates result artifact integrity/pass status via `scripts/check_promptfoo_results.py`.
 
 ## Query Security Scan (Garak Baseline)
 Run a minimal garak baseline scan against the local `/query` endpoint in retrieval mode:

@@ -5,6 +5,9 @@ on:
     branches: [ "main" ]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -80,8 +83,7 @@ jobs:
             fi
             sleep 1
           done
-          echo "Backend failed to become healthy."
-          cat /tmp/rag-backend.log
+          echo "Backend failed to become healthy. Backend log output is withheld for compliance."
           exit 1
 
       - name: Run role-policy smoke script
@@ -89,11 +91,15 @@ jobs:
 
       - name: Show backend log on failure
         if: failure()
-        run: cat /tmp/rag-backend.log
+        run: |
+          if [ -f /tmp/rag-backend.log ]; then
+            echo "backend_log_bytes=$(wc -c </tmp/rag-backend.log)"
+          else
+            echo "backend_log_missing=true"
+          fi
 
   promptfoo-eval:
     runs-on: ubuntu-latest
-    continue-on-error: true
     env:
       RAG_AUTH_DISABLED: "1"
       RAG_USE_LLM: "0"
@@ -132,12 +138,14 @@ jobs:
             fi
             sleep 1
           done
-          echo "Backend failed to become healthy."
-          cat /tmp/rag-promptfoo-backend.log
+          echo "Backend failed to become healthy. Backend log output is withheld for compliance."
           exit 1
 
       - name: Run promptfoo eval
         run: ./scripts/run_promptfoo_eval.sh
+
+      - name: Validate promptfoo gate
+        run: python3 ./scripts/check_promptfoo_results.py --results-path artifacts/promptfoo/results.json
 
       - name: Upload promptfoo artifact
         if: always()
@@ -149,7 +157,12 @@ jobs:
 
       - name: Show backend log on failure
         if: failure()
-        run: cat /tmp/rag-promptfoo-backend.log
+        run: |
+          if [ -f /tmp/rag-promptfoo-backend.log ]; then
+            echo "backend_log_bytes=$(wc -c </tmp/rag-promptfoo-backend.log)"
+          else
+            echo "backend_log_missing=true"
+          fi
 
   security:
     runs-on: ubuntu-latest
