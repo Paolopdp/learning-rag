@@ -207,8 +207,8 @@ The CI pipeline runs:
 - `syft` (SBOM generation)
 - `promptfoo` eval (non-blocking baseline while assertions stabilize)
 
-Nightly LLM security workflow:
-- `garak` scan against `/query` (non-blocking baseline, artifact uploaded as `garak-results`)
+Nightly query-security baseline workflow:
+- `garak` scan against `/query` in retrieval mode (`RAG_USE_LLM=0`, non-blocking baseline, artifact uploaded as `garak-summary`)
 
 ## Tests
 Preferred (scripted):
@@ -244,8 +244,8 @@ Node runtime note:
 Output artifact:
 - `artifacts/promptfoo/results.json`
 
-## LLM Security Scan (Garak)
-Run a minimal garak scan against the local `/query` endpoint:
+## Query Security Scan (Garak Baseline)
+Run a minimal garak baseline scan against the local `/query` endpoint in retrieval mode:
 ```bash
 cd backend
 source .venv/bin/activate
@@ -261,11 +261,14 @@ cd ..
 ./scripts/run_garak_scan.sh
 ```
 
-Output artifacts:
-- `artifacts/garak/garak-console.log`
+Output artifacts (sanitized by default):
+- `artifacts/garak/garak-summary.json`
 - `artifacts/garak/rest_generator_options.json`
 - `artifacts/garak/garak_run_config.yaml`
-- `artifacts/garak/*` (garak report files)
+
+Notes:
+- Raw garak reports are not persisted by default. Set `RAG_GARAK_KEEP_RAW_ARTIFACTS=1` only for local debugging.
+- This baseline does not exercise LLM generation regressions because it runs with `RAG_USE_LLM=0`.
 
 ## Demo Dataset
 - Italian Wikipedia excerpts in `data/wikipedia_it/`

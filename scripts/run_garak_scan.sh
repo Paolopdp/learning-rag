@@ -10,6 +10,8 @@ GARAK_PROBES="${GARAK_PROBES:-promptinject}"
 GARAK_GENERATIONS="${GARAK_GENERATIONS:-1}"
 GARAK_REPORT_PREFIX="${GARAK_REPORT_PREFIX:-garak-report}"
 GARAK_REPORT_DIR="${RAG_GARAK_REPORT_DIR:-$ARTIFACT_DIR}"
+GARAK_SUMMARY_FILE="${RAG_GARAK_SUMMARY_FILE:-$ARTIFACT_DIR/garak-summary.json}"
+GARAK_KEEP_RAW_ARTIFACTS="${RAG_GARAK_KEEP_RAW_ARTIFACTS:-0}"
 
 if ! command -v curl >/dev/null 2>&1; then
   echo "curl is required."
@@ -33,6 +35,7 @@ fi
 
 mkdir -p "$ARTIFACT_DIR"
 mkdir -p "$GARAK_REPORT_DIR"
+mkdir -p "$(dirname "$GARAK_SUMMARY_FILE")"
 
 if [[ "$GARAK_REPORT_PREFIX" == *"/"* ]]; then
   echo "GARAK_REPORT_PREFIX must be a filename prefix, not a path."
@@ -41,6 +44,7 @@ if [[ "$GARAK_REPORT_PREFIX" == *"/"* ]]; then
 fi
 
 report_dir_abs="$(cd "$GARAK_REPORT_DIR" && pwd)"
+summary_file_abs="$(cd "$(dirname "$GARAK_SUMMARY_FILE")" && pwd)/$(basename "$GARAK_SUMMARY_FILE")"
 
 xdg_root="$ARTIFACT_DIR/xdg"
 mkdir -p "$xdg_root/data" "$xdg_root/cache" "$xdg_root/config"
@@ -96,6 +100,11 @@ reporting:
 EOF
 
 echo "Running garak scan..."
+run_started_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+run_started_epoch="$(date +%s)"
+raw_output_file="$(mktemp)"
+
+set +e
 # shellcheck disable=SC2086
 $GARAK_BIN \
   --config "$runtime_config_file" \
@@ -105,7 +114,83 @@ $GARAK_BIN \
   --probes "$GARAK_PROBES" \
   --generations "$GARAK_GENERATIONS" \
   --report_prefix "$GARAK_REPORT_PREFIX" \
-  2>&1 | tee "$ARTIFACT_DIR/garak-console.log"
+  >"$raw_output_file" 2>&1
+garak_exit_code=$?
+set -e
+
+run_finished_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+run_finished_epoch="$(date +%s)"
+run_duration_seconds=$((run_finished_epoch - run_started_epoch))
+
+report_jsonl_path="$report_dir_abs/$GARAK_REPORT_PREFIX.report.jsonl"
+report_html_path="$report_dir_abs/$GARAK_REPORT_PREFIX.report.html"
+
+"$PYTHON_BIN" - "$report_jsonl_path" "$summary_file_abs" "$GARAK_PROBES" "$GARAK_GENERATIONS" "$garak_exit_code" "$run_started_at" "$run_finished_at" "$run_duration_seconds" <<'PY'
+import json
+import os
+import sys
+
+report_path = sys.argv[1]
+summary_path = sys.argv[2]
+probes = sys.argv[3]
+generations = int(sys.argv[4])
+exit_code = int(sys.argv[5])
+started_at = sys.argv[6]
+finished_at = sys.argv[7]
+duration_seconds = int(sys.argv[8])
+
+eval_rows = []
+if os.path.exists(report_path):
+    with open(report_path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if record.get("entry_type") != "eval":
+                continue
+            eval_rows.append(
+                {
+                    "probe": record.get("probe"),
+                    "detector": record.get("detector"),
+                    "passed": record.get("passed"),
+                    "total": record.get("total"),
+                    "nones": record.get("nones"),
+                }
+            )
+
+llm_enabled = os.getenv("RAG_USE_LLM", "0").lower() in {"1", "true", "yes"}
+summary = {
+    "scan_mode": "llm_generation" if llm_enabled else "retrieval_only",
+    "garak_exit_code": exit_code,
+    "probes": probes,
+    "generations": generations,
+    "started_at": started_at,
+    "finished_at": finished_at,
+    "duration_seconds": duration_seconds,
+    "report_found": os.path.exists(report_path),
+    "eval": eval_rows,
+}
+
+with open(summary_path, "w", encoding="utf-8") as fh:
+    json.dump(summary, fh, indent=2, sort_keys=True)
+    fh.write("\n")
+PY
+
+if [ "$GARAK_KEEP_RAW_ARTIFACTS" != "1" ]; then
+  rm -f "$report_jsonl_path" "$report_html_path"
+fi
+
+rm -f "$raw_output_file"
+
+if [ "$garak_exit_code" -ne 0 ]; then
+  echo "Garak scan failed with exit code $garak_exit_code. Raw output is withheld for compliance."
+  echo "Sanitized summary: $summary_file_abs"
+  exit "$garak_exit_code"
+fi
 
 echo "Garak scan completed."
-echo "Artifacts directory: $ARTIFACT_DIR"
+echo "Sanitized summary: $summary_file_abs"
