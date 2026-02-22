@@ -119,6 +119,11 @@ class QueryPolicySummary(BaseModel):
     pii_redaction_backend: str = "regex"
     pii_redaction_applied: bool = False
     pii_redactions: dict[str, int] = Field(default_factory=dict)
+    rate_limit_enabled: bool = False
+    rate_limit_backend: str | None = None
+    rate_limit_requests: int | None = Field(default=None, ge=1)
+    rate_limit_window_seconds: int | None = Field(default=None, ge=1)
+    rate_limit_remaining: int | None = Field(default=None, ge=0)
 
 
 class QueryResponse(BaseModel):

@@ -22,7 +22,7 @@ if [ "${SMOKE_DB_RESET:-0}" = "1" ]; then
   docker compose down
 fi
 
-docker compose up -d db
+docker compose up -d db redis
 
 uv pip install -e ".[dev]"
 
@@ -30,6 +30,7 @@ alembic upgrade head
 
 export RAG_STORE=postgres
 export RAG_DATABASE_URL="${RAG_DATABASE_URL:-postgresql+psycopg://rag:rag@localhost:5432/rag}"
+export RAG_REDIS_URL="${RAG_REDIS_URL:-redis://localhost:6379/0}"
 
 HOST="${RAG_HOST:-127.0.0.1}"
 PORT="${RAG_PORT:-8000}"

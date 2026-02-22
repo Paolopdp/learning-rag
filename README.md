@@ -143,6 +143,7 @@ Audit logging is best-effort and will not block core API operations if the DB is
 Invalid workspace IDs return `400` before any processing.
 PII redaction is applied both at ingestion-time (stored document text) and response-time (query answer/excerpts) for baseline identifiers (`email`, `IBAN`, Italian tax code, credit card).
 Query endpoint now enforces per-workspace rate limiting and returns `429` with `Retry-After` when limits are exceeded.
+Rate-limit counters are stored in Redis (Valkey compatible) by default, with automatic in-memory fallback if Redis is unavailable.
 Governance reference: `docs/governance.md`.
 Threat model reference: `docs/threat-model.md`.
 
@@ -207,6 +208,7 @@ Environment variables:
 - `RAG_QUERY_RATE_LIMIT_ENABLED=0` to disable query throttling in local/debug flows
 - `RAG_QUERY_RATE_LIMIT_REQUESTS` to configure max queries per workspace in window (default `20`)
 - `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
+- `RAG_REDIS_URL` to configure Redis/Valkey endpoint for query throttling (default `redis://localhost:6379/0`)
 
 Optional Presidio backend install:
 ```bash

@@ -45,6 +45,11 @@ type QueryPolicySummary = {
   pii_redaction_backend?: string;
   pii_redaction_applied?: boolean;
   pii_redactions?: Record<string, number>;
+  rate_limit_enabled?: boolean;
+  rate_limit_backend?: string;
+  rate_limit_requests?: number | null;
+  rate_limit_window_seconds?: number | null;
+  rate_limit_remaining?: number | null;
 };
 
 type QueryResponse = {
@@ -915,6 +920,22 @@ export default function Home() {
                         {Object.entries(queryPolicy.pii_redactions)
                           .map(([entity, count]) => `${entity}=${count}`)
                           .join(", ")}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Rate limiting</span>
+                      <span className="text-[color:var(--foreground)]">
+                        {queryPolicy.rate_limit_enabled ? "enabled" : "disabled"}
+                      </span>
+                    </div>
+                    {queryPolicy.rate_limit_enabled ? (
+                      <div className="text-xs text-[color:var(--muted)]">
+                        Backend: {queryPolicy.rate_limit_backend ?? "memory"}
+                        {" · "}
+                        Remaining: {queryPolicy.rate_limit_remaining ?? "?"}
+                        {" · "}
+                        Window: {queryPolicy.rate_limit_requests ?? "?"} req /{" "}
+                        {queryPolicy.rate_limit_window_seconds ?? "?"}s
                       </div>
                     ) : null}
                   </div>

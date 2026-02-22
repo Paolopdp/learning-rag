@@ -5,9 +5,10 @@ import pytest
 from fastapi import HTTPException
 
 from app import main as app_main
+from app import rate_limit as rate_limit_module
 from app.auth import UserContext
 from app.models import Chunk
-from app.rate_limit import InMemoryWindowRateLimiter
+from app.rate_limit import InMemoryWindowRateLimiter, RedisWindowRateLimiter
 from app.retrieval import RetrievalResult
 from app.schemas import QueryRequest
 
@@ -53,6 +54,19 @@ class _SingleResultStore:
         ]
 
 
+class _FakeRedisClient:
+    def __init__(self) -> None:
+        self._counts: dict[str, int] = {}
+
+    def register_script(self, _script: str):
+        def _run(*, keys, args):
+            key = keys[0]
+            self._counts[key] = self._counts.get(key, 0) + 1
+            return self._counts[key]
+
+        return _run
+
+
 def test_query_rate_limit_is_workspace_scoped(monkeypatch) -> None:
     events = []
     store = _SingleResultStore()
@@ -81,6 +95,10 @@ def test_query_rate_limit_is_workspace_scoped(monkeypatch) -> None:
     assert second.answer == "workspace=22222222-2222-2222-2222-222222222222"
     assert len(events) == 2
     assert all(event["payload"]["outcome"] == "success" for event in events)
+    assert first.policy.rate_limit_enabled is True
+    assert first.policy.rate_limit_backend == "memory"
+    assert first.policy.rate_limit_requests == 1
+    assert first.policy.rate_limit_window_seconds == 60
 
 
 def test_query_rate_limit_blocks_and_recovers_after_window(monkeypatch) -> None:
@@ -118,9 +136,118 @@ def test_query_rate_limit_blocks_and_recovers_after_window(monkeypatch) -> None:
     assert len(failure_events) == 1
     assert failure_events[0]["payload"]["reason"] == "rate_limited"
     assert failure_events[0]["payload"]["rate_limit_enabled"] is True
+    assert failure_events[0]["payload"]["rate_limit_backend"] == "memory"
     assert failure_events[0]["payload"]["rate_limit_requests"] == 1
     assert failure_events[0]["payload"]["rate_limit_window_seconds"] == 60
 
     clock.advance(61)
     third = app_main.query(workspace_id, request, user)
     assert third.answer == "workspace=11111111-1111-1111-1111-111111111111"
+
+
+def test_redis_window_rate_limiter_counts_per_window() -> None:
+    clock = _FakeClock()
+    limiter = RedisWindowRateLimiter(
+        redis_client=_FakeRedisClient(),
+        now_fn=clock.now,
+    )
+
+    first = limiter.check(key="workspace-1", limit=1, window_seconds=60)
+    second = limiter.check(key="workspace-1", limit=1, window_seconds=60)
+
+    assert first.allowed is True
+    assert first.backend == "redis"
+    assert first.remaining == 0
+    assert second.allowed is False
+    assert second.backend == "redis"
+    assert second.retry_after_seconds > 0
+
+    clock.advance(61)
+    third = limiter.check(key="workspace-1", limit=1, window_seconds=60)
+    assert third.allowed is True
+    assert third.backend == "redis"
+
+
+def test_resilient_rate_limit_falls_back_to_memory_once(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    class _FailingLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int):
+            raise RuntimeError("redis unavailable")
+
+    clock = _FakeClock()
+    fallback = InMemoryWindowRateLimiter(now_fn=clock.now)
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+
+    limiter = rate_limit_module.ResilientRateLimiter(
+        primary=_FailingLimiter(),
+        fallback=fallback,
+    )
+
+    first = limiter.check(key="workspace-1", limit=2, window_seconds=60)
+    second = limiter.check(key="workspace-1", limit=2, window_seconds=60)
+
+    assert first.allowed is True
+    assert second.allowed is True
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "query_rate_limit_redis_unavailable_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+    assert payload["extra"]["error_message"] == "redis unavailable"
+    assert payload["extra"]["fallback_backend"] == "memory"
+
+
+def test_build_query_rate_limiter_returns_resilient_wrapper(monkeypatch) -> None:
+    class _FakeRedisLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int):
+            return rate_limit_module.RateLimitDecision(
+                allowed=True,
+                backend="redis",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=limit - 1,
+                retry_after_seconds=0,
+            )
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", lambda: _FakeRedisLimiter())
+    limiter = rate_limit_module.build_query_rate_limiter()
+
+    decision = limiter.check(key="workspace-1", limit=3, window_seconds=60)
+    assert decision.allowed is True
+    assert decision.backend == "redis"
+
+
+def test_build_query_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    def _boom():
+        raise RuntimeError("redis client init failed")
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+
+    limiter = rate_limit_module.build_query_rate_limiter()
+
+    assert isinstance(limiter, InMemoryWindowRateLimiter)
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "query_rate_limit_redis_init_failed_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+    assert payload["extra"]["error_message"] == "redis client init failed"
+
+
+def test_redis_target_redacts_credentials(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://user:secret@redis.internal:6380/2")
+    assert rate_limit_module.redis_target() == "redis://redis.internal:6380/2"

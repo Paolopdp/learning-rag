@@ -16,12 +16,13 @@ fi
 # shellcheck disable=SC1091
 source "$BACKEND_DIR/.venv/bin/activate"
 
-docker compose -f "$ROOT_DIR/docker-compose.yml" up -d db
+docker compose -f "$ROOT_DIR/docker-compose.yml" up -d db redis
 
 uv pip install -e "$BACKEND_DIR/.[dev]"
 
 export RAG_STORE=postgres
 export RAG_DATABASE_URL="${RAG_DATABASE_URL:-postgresql+psycopg://rag:rag@localhost:5432/rag}"
+export RAG_REDIS_URL="${RAG_REDIS_URL:-redis://localhost:6379/0}"
 
 pushd "$BACKEND_DIR" >/dev/null
 alembic upgrade head
