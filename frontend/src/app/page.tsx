@@ -41,6 +41,10 @@ type QueryPolicySummary = {
   allowed_classification_labels: ClassificationLabel[];
   candidate_results: number;
   returned_results: number;
+  pii_redaction_enabled?: boolean;
+  pii_redaction_backend?: string;
+  pii_redaction_applied?: boolean;
+  pii_redactions?: Record<string, number>;
 };
 
 type QueryResponse = {
@@ -887,6 +891,32 @@ export default function Home() {
                     <div className="text-xs">
                       Filtering mode: {queryPolicy.policy_filtering_mode}
                     </div>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>PII redaction</span>
+                      <span className="text-[color:var(--foreground)]">
+                        {queryPolicy.pii_redaction_enabled ? "enabled" : "disabled"}
+                        {queryPolicy.pii_redaction_applied ? " (applied)" : ""}
+                      </span>
+                    </div>
+                    {queryPolicy.pii_redaction_enabled ? (
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span>PII backend</span>
+                        <span className="text-[color:var(--foreground)]">
+                          {queryPolicy.pii_redaction_backend ?? "regex"}
+                        </span>
+                      </div>
+                    ) : null}
+                    {queryPolicy.pii_redaction_applied &&
+                    queryPolicy.pii_redactions &&
+                    Object.keys(queryPolicy.pii_redactions).length > 0 ? (
+                      <div className="text-xs text-[color:var(--muted)]">
+                        Redacted:
+                        {" "}
+                        {Object.entries(queryPolicy.pii_redactions)
+                          .map(([entity, count]) => `${entity}=${count}`)
+                          .join(", ")}
+                      </div>
+                    ) : null}
                   </div>
                 ) : (
                   <p className="mt-2 text-sm text-[color:var(--muted)]">

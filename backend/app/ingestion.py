@@ -7,6 +7,7 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from app.models import Chunk, Document
+from app.pii import pii_ingest_redaction_enabled, redact_text
 
 _HEADER_KEYS = {
     "titolo": "title",
@@ -37,6 +38,10 @@ def parse_wikipedia_file(path: Path, workspace_id: str | None = None) -> Documen
     text = body.strip()
     if not text:
         raise ValueError(f"Empty document body: {path}")
+    text = redact_text(
+        text,
+        enabled=pii_ingest_redaction_enabled(),
+    ).text
 
     return Document(
         workspace_id=workspace_id,

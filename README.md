@@ -141,6 +141,7 @@ Each audit payload includes an `outcome` (`success` or `failure`).
 Auth events (register/login) are recorded with metadata only.
 Audit logging is best-effort and will not block core API operations if the DB is unavailable.
 Invalid workspace IDs return `400` before any processing.
+PII redaction is applied both at ingestion-time (stored document text) and response-time (query answer/excerpts) for baseline identifiers (`email`, `IBAN`, Italian tax code, credit card).
 Governance reference: `docs/governance.md`.
 Threat model reference: `docs/threat-model.md`.
 
@@ -198,6 +199,17 @@ Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)
 - `RAG_AUTH_DISABLED=1` to bypass auth (tests/dev only)
 - `RAG_CORS_ORIGINS` to override allowed origins (comma-separated)
+- `RAG_PII_REDACTION_ENABLED=0` to disable response redaction in local/debug flows
+- `RAG_PII_INGEST_REDACTION_ENABLED=0` to disable ingestion-time redaction in local/debug flows
+- `RAG_PII_BACKEND=presidio` to use Presidio recognizers when optional dependencies are installed (`regex` is default/fallback)
+
+Optional Presidio backend install:
+```bash
+cd backend
+source .venv/bin/activate
+uv pip install -e ".[dev,pii]"
+```
+If Presidio dependencies/runtime are missing, the backend logs a structured warning once and falls back to regex redaction.
 
 ## CI Security Checks
 The CI pipeline runs:
@@ -206,6 +218,7 @@ The CI pipeline runs:
 - `trivy` (filesystem scan)
 - `syft` (SBOM generation)
 - `promptfoo` eval (blocking on core invariants: pass rows + HTTP 200)
+- `pii-presidio-smoke` (non-blocking runtime smoke for optional Presidio backend)
 
 Evaluation gate policy reference: `docs/eval-gates.md`.
 

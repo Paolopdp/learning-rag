@@ -30,6 +30,9 @@ observability = [
   "opentelemetry-exporter-otlp",
   "opentelemetry-instrumentation-fastapi",
 ]
+pii = [
+  "presidio-analyzer",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

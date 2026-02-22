@@ -115,6 +115,10 @@ class QueryPolicySummary(BaseModel):
     allowed_classification_labels: list[ClassificationLabel]
     candidate_results: int = Field(ge=0)
     returned_results: int = Field(ge=0)
+    pii_redaction_enabled: bool = False
+    pii_redaction_backend: str = "regex"
+    pii_redaction_applied: bool = False
+    pii_redactions: dict[str, int] = Field(default_factory=dict)
 
 
 class QueryResponse(BaseModel):

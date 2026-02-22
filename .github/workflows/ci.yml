@@ -164,6 +164,33 @@ jobs:
             echo "backend_log_missing=true"
           fi
 
+  pii-presidio-smoke:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install backend dependencies (with optional PII backend)
+        run: uv pip install --system -e ".[dev,pii]"
+
+      - name: Run Presidio PII runtime smoke
+        env:
+          RAG_PII_BACKEND: presidio
+          RAG_PII_REDACTION_ENABLED: "1"
+        run: python -m pytest tests/test_pii.py::test_redact_text_with_presidio_runtime_when_installed
+
   security:
     runs-on: ubuntu-latest
     permissions:

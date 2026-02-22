@@ -130,6 +130,7 @@ def test_query_filters_restricted_chunks_for_member(monkeypatch) -> None:
     assert response.policy.access_role == "member"
     assert response.policy.allowed_classification_labels == ["internal", "public"]
     assert response.policy.policy_filtering_mode == "in_retrieval"
+    assert response.policy.pii_redaction_backend in {"regex", "presidio"}
     assert response.policy.candidate_results == 2
     assert response.policy.returned_results == 2
     assert store.last_top_k == 2
@@ -183,6 +184,7 @@ def test_query_returns_empty_when_policy_blocks_all_results(monkeypatch) -> None
     assert response.policy.access_role == "member"
     assert response.policy.allowed_classification_labels == ["internal", "public"]
     assert response.policy.policy_filtering_mode == "in_retrieval"
+    assert response.policy.pii_redaction_backend in {"regex", "presidio"}
     assert response.policy.candidate_results == 0
     assert response.policy.returned_results == 0
 
@@ -302,3 +304,86 @@ def test_query_member_still_gets_allowed_results_with_many_forbidden_chunks(monk
     assert all(citation.source_title.startswith("Allowed") for citation in response.citations)
     assert response.policy.allowed_classification_labels == ["internal", "public"]
     assert response.policy.returned_results == 3
+
+
+def test_query_redacts_pii_in_answer_and_citations(monkeypatch) -> None:
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    events = []
+    pii_text = "Contattami su mario.rossi@example.com per i dettagli."
+    store = _PolicyChunkStore(
+        results=[
+            _result(
+                document_id="doc-public",
+                title="Public",
+                content=pii_text,
+                score=0.98,
+            ),
+        ],
+        classification_map={"doc-public": "public"},
+    )
+
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "1")
+
+    response = app_main.query(
+        workspace_id=workspace_id,
+        request=QueryRequest(question="test", top_k=1),
+        current_user=UserContext(
+            id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            email="member@local",
+        ),
+    )
+
+    assert "mario.rossi@example.com" not in response.answer
+    assert "[REDACTED_EMAIL]" in response.answer
+    assert response.citations[0].excerpt == response.answer
+    assert response.policy.pii_redaction_enabled is True
+    assert response.policy.pii_redaction_backend in {"regex", "presidio"}
+    assert response.policy.pii_redaction_applied is True
+    assert response.policy.pii_redactions.get("email") == 2
+
+    assert len(events) == 1
+    payload = events[0]["payload"]
+    assert payload["pii_redaction_applied"] is True
+    assert payload["pii_redactions"]["email"] == 2
+
+
+def test_query_pii_redaction_can_be_disabled(monkeypatch) -> None:
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+    pii_text = "Contattami su mario.rossi@example.com per i dettagli."
+    store = _PolicyChunkStore(
+        results=[
+            _result(
+                document_id="doc-public",
+                title="Public",
+                content=pii_text,
+                score=0.98,
+            ),
+        ],
+        classification_map={"doc-public": "public"},
+    )
+
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+
+    response = app_main.query(
+        workspace_id=workspace_id,
+        request=QueryRequest(question="test", top_k=1),
+        current_user=UserContext(
+            id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            email="member@local",
+        ),
+    )
+
+    assert "mario.rossi@example.com" in response.answer
+    assert response.policy.pii_redaction_enabled is False
+    assert response.policy.pii_redaction_backend in {"regex", "presidio"}
+    assert response.policy.pii_redaction_applied is False
+    assert response.policy.pii_redactions == {}

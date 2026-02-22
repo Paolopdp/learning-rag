@@ -13,6 +13,7 @@ from app.embeddings import embed_text, embed_texts
 from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
+from app.pii import merge_redaction_counts, pii_backend, pii_redaction_enabled, redact_text
 from app.schemas import (
     AuditEvent,
     AuthResponse,
@@ -553,6 +554,8 @@ def query(
     if not chunk_store.has_workspace_data(workspace_id):
         raise HTTPException(status_code=400, detail="No data ingested yet.")
 
+    pii_enabled = pii_redaction_enabled()
+    configured_pii_backend = pii_backend()
     query_embedding = embed_text(request.question)
     results = chunk_store.search(
         query_embedding,
@@ -567,6 +570,8 @@ def query(
         "allowed_classification_labels": sorted(allowed_labels),
         "access_role": role,
         "candidate_results": candidate_results,
+        "pii_redaction_enabled": pii_enabled,
+        "pii_redaction_backend": configured_pii_backend,
     }
 
     if not results:
@@ -579,6 +584,8 @@ def query(
                 **policy_summary,
                 "results": 0,
                 "llm_used": False,
+                "pii_redaction_applied": False,
+                "pii_redactions": {},
                 "outcome": "success",
             },
         )
@@ -588,6 +595,8 @@ def query(
             policy={
                 **policy_summary,
                 "returned_results": 0,
+                "pii_redaction_applied": False,
+                "pii_redactions": {},
             },
         )
 
@@ -600,35 +609,51 @@ def query(
     else:
         answer = top_chunks[0].content
 
+    answer_redaction = redact_text(answer)
+    citations = []
+    citation_redactions: list[dict[str, int]] = []
+    for result in results:
+        excerpt_redaction = redact_text(result.chunk.content[:200])
+        citations.append(
+            {
+                "chunk_id": result.chunk.chunk_id,
+                "source_title": result.chunk.source_title,
+                "source_url": result.chunk.source_url,
+                "score": result.score,
+                "excerpt": excerpt_redaction.text,
+            }
+        )
+        citation_redactions.append(excerpt_redaction.counts)
+
+    pii_redactions = merge_redaction_counts(answer_redaction.counts, *citation_redactions)
+    pii_redaction_applied = bool(pii_redactions)
+    policy_summary_with_backend = {
+        **policy_summary,
+        "pii_redaction_backend": answer_redaction.backend,
+    }
+
     log_event(
         workspace_id=workspace_id,
         user_id=None if auth_disabled() else current_user.id,
         action="query",
         payload={
             "top_k": request.top_k,
-            **policy_summary,
+            **policy_summary_with_backend,
             "results": len(results),
             "llm_used": llm_enabled(),
+            "pii_redaction_applied": pii_redaction_applied,
+            "pii_redactions": pii_redactions,
             "outcome": "success",
         },
     )
-
-    citations = [
-        {
-            "chunk_id": result.chunk.chunk_id,
-            "source_title": result.chunk.source_title,
-            "source_url": result.chunk.source_url,
-            "score": result.score,
-            "excerpt": result.chunk.content[:200],
-        }
-        for result in results
-    ]
     return QueryResponse(
-        answer=answer,
+        answer=answer_redaction.text,
         citations=citations,
         policy={
-            **policy_summary,
+            **policy_summary_with_backend,
             "returned_results": len(results),
+            "pii_redaction_applied": pii_redaction_applied,
+            "pii_redactions": pii_redactions,
         },
     )
 

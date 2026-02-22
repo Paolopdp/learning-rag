@@ -20,6 +20,7 @@ This document defines how evaluation and security checks move from monitoring to
 - `security` job (`gitleaks`, `trivy`, `syft`): `blocking`.
 - `osv-scan`: `blocking`.
 - `promptfoo-eval`: `blocking` on core invariants.
+- `pii-presidio-smoke`: `warning` (non-blocking, runtime availability signal for optional Presidio backend).
 
 ## Promptfoo Blocking Invariants
 `promptfoo` must satisfy all of the following:
@@ -43,3 +44,4 @@ Implementation:
 ## Next Tightening Step
 - Introduce non-blocking `garak` checks in CI with sanitized summary-only artifacts.
 - After baseline stability, promote selected `garak` checks to `blocking`.
+- If `pii-presidio-smoke` is stable across environments, consider promoting it to `blocking` for branches which require Presidio backend support.
