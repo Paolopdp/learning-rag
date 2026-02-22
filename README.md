@@ -207,8 +207,9 @@ The CI pipeline runs:
 - `syft` (SBOM generation)
 - `promptfoo` eval (non-blocking baseline while assertions stabilize)
 
-Nightly query-security baseline workflow:
-- `garak` scan against `/query` in retrieval mode (`RAG_USE_LLM=0`, non-blocking baseline, artifact uploaded as `garak-summary`)
+Security scan workflows:
+- Query baseline: `garak` scan against `/query` in retrieval mode (`RAG_USE_LLM=0`, non-blocking, artifact `garak-summary`) via `.github/workflows/llm-security.yml`
+- LLM generation: `garak` scan against `/query` with `RAG_USE_LLM=1` (non-blocking weekly/manual, artifact `garak-llm-summary`) via `.github/workflows/llm-generation-security.yml`
 
 ## Tests
 Preferred (scripted):
@@ -269,6 +270,30 @@ Output artifacts (sanitized by default):
 Notes:
 - Raw garak reports are not persisted by default. Set `RAG_GARAK_KEEP_RAW_ARTIFACTS=1` only for local debugging.
 - This baseline does not exercise LLM generation regressions because it runs with `RAG_USE_LLM=0`.
+
+## LLM Generation Security Scan (Garak)
+Run garak against the same `/query` endpoint with real LLM generation enabled:
+```bash
+cd backend
+source .venv/bin/activate
+uv pip install -e ".[dev,llm]"
+RAG_AUTH_DISABLED=1 \
+RAG_USE_LLM=1 \
+RAG_EMBEDDING_BACKEND=hash \
+RAG_LLM_MODEL_PATH=/absolute/path/to/model.gguf \
+uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+In another terminal:
+```bash
+RAG_GARAK_ARTIFACT_DIR=artifacts/garak-llm \
+RAG_GARAK_SUMMARY_FILE=artifacts/garak-llm/garak-summary.json \
+./scripts/run_garak_scan.sh
+```
+
+Notes:
+- Keep `RAG_GARAK_KEEP_RAW_ARTIFACTS=0` (default) to avoid persisting prompt/response transcripts.
+- Model weights have separate licenses; verify and document the chosen model license.
 
 ## Demo Dataset
 - Italian Wikipedia excerpts in `data/wikipedia_it/`

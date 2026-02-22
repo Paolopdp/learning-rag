@@ -68,6 +68,13 @@ This project includes a minimal governance baseline focused on traceability and 
 - Uploaded artifact: sanitized summary only (`garak-summary`)
 - Raw prompt/response report artifacts are disabled by default for compliance
 
+## LLM Generation Security Testing (Garak)
+- Runner: `scripts/run_garak_scan.sh`
+- Current CI mode: non-blocking weekly/manual workflow (`.github/workflows/llm-generation-security.yml`) with `RAG_USE_LLM=1`
+- CI model: `TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF` (`tinyllama-1.1b-chat-v1.0.Q2_K.gguf`)
+- Uploaded artifact: sanitized summary only (`garak-llm-summary`)
+- Raw prompt/response report artifacts are disabled by default for compliance
+
 ## Local verification
 ```bash
 # Run backend with postgres + migrations
