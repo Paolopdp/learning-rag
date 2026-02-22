@@ -202,6 +202,7 @@ Environment variables:
 - `RAG_PII_REDACTION_ENABLED=0` to disable response redaction in local/debug flows
 - `RAG_PII_INGEST_REDACTION_ENABLED=0` to disable ingestion-time redaction in local/debug flows
 - `RAG_PII_BACKEND=presidio` to use Presidio recognizers when optional dependencies are installed (`regex` is default/fallback)
+- `RAG_PII_DEBUG=1` to include Presidio fallback stack traces in logs during troubleshooting
 
 Optional Presidio backend install:
 ```bash

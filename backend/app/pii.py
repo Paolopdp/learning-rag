@@ -58,8 +58,17 @@ def pii_ingest_redaction_enabled() -> bool:
     return os.getenv("RAG_PII_INGEST_REDACTION_ENABLED", "1").lower() in _ENABLED_VALUES
 
 
+def pii_debug_enabled() -> bool:
+    return os.getenv("RAG_PII_DEBUG", "0").lower() in _ENABLED_VALUES
+
+
 def pii_backend() -> str:
     configured = os.getenv("RAG_PII_BACKEND", _DEFAULT_BACKEND).strip().lower()
+    return _resolve_pii_backend(configured)
+
+
+@lru_cache(maxsize=16)
+def _resolve_pii_backend(configured: str) -> str:
     if configured in _PII_BACKENDS:
         return configured
     logger.warning(
@@ -80,15 +89,20 @@ class RedactionResult:
     backend: str
 
 
-def redact_text(value: str, *, enabled: bool | None = None) -> RedactionResult:
+def redact_text(
+    value: str,
+    *,
+    enabled: bool | None = None,
+    backend: str | None = None,
+) -> RedactionResult:
     enabled_value = pii_redaction_enabled() if enabled is None else enabled
+    resolved_backend = backend if backend in _PII_BACKENDS else pii_backend()
     if not value:
-        return RedactionResult(text=value, counts={}, applied=False, backend=pii_backend())
+        return RedactionResult(text=value, counts={}, applied=False, backend=resolved_backend)
     if not enabled_value:
-        return RedactionResult(text=value, counts={}, applied=False, backend=pii_backend())
+        return RedactionResult(text=value, counts={}, applied=False, backend=resolved_backend)
 
-    backend = pii_backend()
-    if backend == "presidio":
+    if resolved_backend == "presidio":
         presidio_result = _redact_with_presidio(value)
         if presidio_result is not None:
             return presidio_result
@@ -215,8 +229,10 @@ def _log_presidio_unavailable(exc: Exception) -> None:
     _PRESIDIO_UNAVAILABLE_WARNING_EMITTED = True
     logger.warning(
         "pii_presidio_backend_unavailable",
+        exc_info=pii_debug_enabled(),
         extra={
             "error_type": type(exc).__name__,
+            "error_message": str(exc),
             "fallback_backend": "regex",
         },
     )

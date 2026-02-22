@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app import pii as pii_module
 from app.pii import RedactionResult, merge_redaction_counts, redact_text
 
 
@@ -90,3 +91,48 @@ def test_redact_text_with_presidio_runtime_when_installed(monkeypatch) -> None:
     assert result.applied is True
     assert result.counts.get("email") == 1
     assert "[REDACTED_EMAIL]" in result.text
+
+
+def test_unknown_backend_warning_is_logged_once_per_value(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    monkeypatch.setenv("RAG_PII_BACKEND", "unexpected_backend")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "1")
+    monkeypatch.setattr(pii_module, "logger", _FakeLogger())
+    pii_module._resolve_pii_backend.cache_clear()
+
+    redact_text("first")
+    redact_text("second")
+    redact_text("third", enabled=False)
+
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "pii_unknown_backend"
+    assert payload["extra"]["configured_backend"] == "unexpected_backend"
+    assert payload["extra"]["fallback_backend"] == "regex"
+
+
+def test_presidio_unavailable_warning_contains_error_message_and_debug_flag(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    monkeypatch.setenv("RAG_PII_DEBUG", "1")
+    monkeypatch.setattr(pii_module, "logger", _FakeLogger())
+    monkeypatch.setattr(pii_module, "_PRESIDIO_UNAVAILABLE_WARNING_EMITTED", False)
+
+    pii_module._log_presidio_unavailable(RuntimeError("missing runtime deps"))
+
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "pii_presidio_backend_unavailable"
+    assert payload["exc_info"] is True
+    assert payload["extra"]["error_type"] == "RuntimeError"
+    assert payload["extra"]["error_message"] == "missing runtime deps"
+    assert payload["extra"]["fallback_backend"] == "regex"

@@ -609,11 +609,19 @@ def query(
     else:
         answer = top_chunks[0].content
 
-    answer_redaction = redact_text(answer)
+    answer_redaction = redact_text(
+        answer,
+        enabled=pii_enabled,
+        backend=configured_pii_backend,
+    )
     citations = []
     citation_redactions: list[dict[str, int]] = []
     for result in results:
-        excerpt_redaction = redact_text(result.chunk.content[:200])
+        excerpt_redaction = redact_text(
+            result.chunk.content[:200],
+            enabled=pii_enabled,
+            backend=configured_pii_backend,
+        )
         citations.append(
             {
                 "chunk_id": result.chunk.chunk_id,
