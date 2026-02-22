@@ -142,6 +142,7 @@ Auth events (register/login) are recorded with metadata only.
 Audit logging is best-effort and will not block core API operations if the DB is unavailable.
 Invalid workspace IDs return `400` before any processing.
 PII redaction is applied both at ingestion-time (stored document text) and response-time (query answer/excerpts) for baseline identifiers (`email`, `IBAN`, Italian tax code, credit card).
+Query endpoint now enforces per-workspace rate limiting and returns `429` with `Retry-After` when limits are exceeded.
 Governance reference: `docs/governance.md`.
 Threat model reference: `docs/threat-model.md`.
 
@@ -203,6 +204,9 @@ Environment variables:
 - `RAG_PII_INGEST_REDACTION_ENABLED=0` to disable ingestion-time redaction in local/debug flows
 - `RAG_PII_BACKEND=presidio` to use Presidio recognizers when optional dependencies are installed (`regex` is default/fallback)
 - `RAG_PII_DEBUG=1` to include Presidio fallback stack traces in logs during troubleshooting
+- `RAG_QUERY_RATE_LIMIT_ENABLED=0` to disable query throttling in local/debug flows
+- `RAG_QUERY_RATE_LIMIT_REQUESTS` to configure max queries per workspace in window (default `20`)
+- `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
 
 Optional Presidio backend install:
 ```bash

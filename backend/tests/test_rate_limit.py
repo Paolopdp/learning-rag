@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+from fastapi import HTTPException
+
+from app import main as app_main
+from app.auth import UserContext
+from app.models import Chunk
+from app.rate_limit import InMemoryWindowRateLimiter
+from app.retrieval import RetrievalResult
+from app.schemas import QueryRequest
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self._value = 1000.0
+
+    def now(self) -> float:
+        return self._value
+
+    def advance(self, seconds: float) -> None:
+        self._value += seconds
+
+
+class _SingleResultStore:
+    def has_workspace_data(self, workspace_id: str) -> bool:
+        return True
+
+    def search(
+        self,
+        query_embedding: np.ndarray,
+        *,
+        top_k: int,
+        workspace_id: str | None,
+        allowed_labels: set[str] | None = None,
+    ) -> list[RetrievalResult]:
+        content = f"workspace={workspace_id}"
+        return [
+            RetrievalResult(
+                chunk=Chunk(
+                    document_id="doc-1",
+                    workspace_id=workspace_id,
+                    content=content,
+                    start_char=0,
+                    end_char=len(content),
+                    chunk_index=0,
+                    source_title="Doc",
+                    source_url=None,
+                ),
+                score=0.99,
+            )
+        ]
+
+
+def test_query_rate_limit_is_workspace_scoped(monkeypatch) -> None:
+    events = []
+    store = _SingleResultStore()
+    clock = _FakeClock()
+
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "query_rate_limiter", InMemoryWindowRateLimiter(now_fn=clock.now))
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    request = QueryRequest(question="test", top_k=1)
+    workspace_a = "11111111-1111-1111-1111-111111111111"
+    workspace_b = "22222222-2222-2222-2222-222222222222"
+
+    first = app_main.query(workspace_a, request, user)
+    second = app_main.query(workspace_b, request, user)
+
+    assert first.answer == "workspace=11111111-1111-1111-1111-111111111111"
+    assert second.answer == "workspace=22222222-2222-2222-2222-222222222222"
+    assert len(events) == 2
+    assert all(event["payload"]["outcome"] == "success" for event in events)
+
+
+def test_query_rate_limit_blocks_and_recovers_after_window(monkeypatch) -> None:
+    events = []
+    store = _SingleResultStore()
+    clock = _FakeClock()
+
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "query_rate_limiter", InMemoryWindowRateLimiter(now_fn=clock.now))
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    request = QueryRequest(question="test", top_k=1)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    first = app_main.query(workspace_id, request, user)
+    assert first.answer == "workspace=11111111-1111-1111-1111-111111111111"
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.query(workspace_id, request, user)
+    error = exc_info.value
+    assert error.status_code == 429
+    assert error.detail == "Too many requests. Please retry later."
+    assert error.headers is not None
+    assert int(error.headers["Retry-After"]) > 0
+
+    failure_events = [event for event in events if event["payload"]["outcome"] == "failure"]
+    assert len(failure_events) == 1
+    assert failure_events[0]["payload"]["reason"] == "rate_limited"
+    assert failure_events[0]["payload"]["rate_limit_enabled"] is True
+    assert failure_events[0]["payload"]["rate_limit_requests"] == 1
+    assert failure_events[0]["payload"]["rate_limit_window_seconds"] == 60
+
+    clock.advance(61)
+    third = app_main.query(workspace_id, request, user)
+    assert third.answer == "workspace=11111111-1111-1111-1111-111111111111"

@@ -48,6 +48,7 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 | TM-13 | Prompt-injection/jailbreak regressions on query and generation paths go undetected | Non-blocking `garak` workflows for retrieval baseline (`RAG_USE_LLM=0`) and LLM generation (`RAG_USE_LLM=1` with model-backed run) | `.github/workflows/llm-security.yml`, `.github/workflows/llm-generation-security.yml`, `scripts/run_garak_scan.sh` | Partially mitigated | Expand probes and promote selected checks to blocking after baseline stability. |
 | TM-14 | Grounding/citation/policy regressions ship unnoticed | Blocking `promptfoo-eval` gate with JSON validation (`success`, assertion pass, HTTP 200) | `.github/workflows/ci.yml`, `promptfoo/rag_policy_eval.yaml`, `scripts/run_promptfoo_eval.sh`, `scripts/check_promptfoo_results.py` | Mitigated (baseline) | Extend assertions and add LLM-generation eval profile. |
 | TM-15 | PII leakage in query answers/citation excerpts and stored chunk text | Ingestion-time and response-time redaction mask baseline identifiers (`email`, `IBAN`, Italian tax code, credit card); optional Presidio backend (`RAG_PII_BACKEND=presidio`) with regex fallback; query policy payload reports redaction status/counts/backend | `backend/tests/test_pii.py`, `backend/tests/test_ingestion.py::test_parse_wikipedia_file_redacts_pii_at_ingest`, `backend/tests/test_query_policy.py::test_query_redacts_pii_in_answer_and_citations`, `.github/workflows/ci.yml` (`pii-presidio-smoke`) | Partially mitigated | Expand recognizer set/locales and evaluate promotion of Presidio smoke gate from warning to blocking. |
+| TM-16 | Query abuse (high request rate) causing resource exhaustion or noisy workloads | Per-workspace in-memory query throttling with `429` + `Retry-After`; throttled attempts are audited with failure outcome/reason | `backend/tests/test_rate_limit.py` | Partially mitigated | Move to distributed/shared limiter for multi-instance deployments and tune limits per role/use-case. |
 | TM-12 | Audit gaps due to best-effort logging failure path | Logging failure does not block business flow (availability-first) and warnings are emitted | `backend/app/audit.py` behavior | Accepted risk | Add retry/dead-letter strategy if stronger audit durability is required. |
 
 ## Known Gaps (Planned)
@@ -55,7 +56,7 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 - Baseline ingestion-time and response-time PII redaction are implemented; broader recognizer coverage and CI runtime validation for Presidio backend are still pending.
 - `promptfoo` is integrated and blocking on core invariants; `garak` workflows are integrated as non-blocking baselines.
 - LLM-generation `garak` coverage depends on CI model download/runtime availability and remains non-blocking.
-- Rate limiting and abuse controls are not yet implemented.
+- Query rate limiting is in-memory and single-process; distributed/global throttling is not yet implemented.
 - Ingestion is demo-dataset based (`/ingest/demo`), not full upload/PDF pipeline yet.
 
 ## Next Security/Eval Steps

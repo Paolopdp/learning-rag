@@ -14,6 +14,12 @@ from app.ingestion import chunk_documents, load_documents_from_dir
 from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
 from app.pii import merge_redaction_counts, pii_backend, pii_redaction_enabled, redact_text
+from app.rate_limit import (
+    InMemoryWindowRateLimiter,
+    query_rate_limit_enabled,
+    query_rate_limit_requests,
+    query_rate_limit_window_seconds,
+)
 from app.schemas import (
     AuditEvent,
     AuthResponse,
@@ -37,6 +43,7 @@ app = FastAPI(title="RAG Backend", version="0.1.0")
 logger = logging.getLogger(__name__)
 
 chunk_store = get_chunk_store()
+query_rate_limiter = InMemoryWindowRateLimiter()
 
 DEFAULT_DOCUMENTS_LIMIT = 50
 MAX_DOCUMENTS_LIMIT = 200
@@ -556,6 +563,39 @@ def query(
 
     pii_enabled = pii_redaction_enabled()
     configured_pii_backend = pii_backend()
+    rate_limit_enabled = query_rate_limit_enabled()
+    rate_limit_requests = query_rate_limit_requests()
+    rate_limit_window_seconds = query_rate_limit_window_seconds()
+    rate_limit_remaining: int | None = None
+    if rate_limit_enabled:
+        rate_limit = query_rate_limiter.check(
+            key=workspace_id,
+            limit=rate_limit_requests,
+            window_seconds=rate_limit_window_seconds,
+        )
+        if not rate_limit.allowed:
+            log_event(
+                workspace_id=workspace_id,
+                user_id=None if auth_disabled() else current_user.id,
+                action="query",
+                payload={
+                    "top_k": request.top_k,
+                    "outcome": "failure",
+                    "reason": "rate_limited",
+                    "rate_limit_enabled": True,
+                    "rate_limit_requests": rate_limit.limit,
+                    "rate_limit_window_seconds": rate_limit.window_seconds,
+                    "rate_limit_retry_after_seconds": rate_limit.retry_after_seconds,
+                    "rate_limit_remaining": 0,
+                },
+            )
+            raise HTTPException(
+                status_code=429,
+                detail="Too many requests. Please retry later.",
+                headers={"Retry-After": str(rate_limit.retry_after_seconds)},
+            )
+        rate_limit_remaining = rate_limit.remaining
+
     query_embedding = embed_text(request.question)
     results = chunk_store.search(
         query_embedding,
@@ -572,6 +612,10 @@ def query(
         "candidate_results": candidate_results,
         "pii_redaction_enabled": pii_enabled,
         "pii_redaction_backend": configured_pii_backend,
+        "rate_limit_enabled": rate_limit_enabled,
+        "rate_limit_requests": rate_limit_requests,
+        "rate_limit_window_seconds": rate_limit_window_seconds,
+        "rate_limit_remaining": rate_limit_remaining,
     }
 
     if not results:
