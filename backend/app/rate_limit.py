@@ -66,10 +66,17 @@ class RateLimitDecision:
 
 
 class InMemoryWindowRateLimiter:
-    def __init__(self, *, now_fn: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        now_fn: Callable[[], float] | None = None,
+        cleanup_every_checks: int = 256,
+    ) -> None:
         self._now_fn = now_fn or time.monotonic
         self._events_by_key: dict[str, deque[float]] = {}
         self._lock = threading.Lock()
+        self._cleanup_every_checks = max(1, cleanup_every_checks)
+        self._checks = 0
 
     def check(
         self,
@@ -82,9 +89,21 @@ class InMemoryWindowRateLimiter:
         cutoff = now - window_seconds
 
         with self._lock:
-            timestamps = self._events_by_key.setdefault(key, deque())
+            self._checks += 1
+            if self._checks % self._cleanup_every_checks == 0:
+                self._prune_stale_keys_locked(cutoff)
+
+            timestamps = self._events_by_key.get(key)
+            if timestamps is None:
+                timestamps = deque()
+                self._events_by_key[key] = timestamps
             while timestamps and timestamps[0] <= cutoff:
                 timestamps.popleft()
+            if not timestamps:
+                # Avoid retaining empty deques forever for inactive keys.
+                self._events_by_key.pop(key, None)
+                timestamps = deque()
+                self._events_by_key[key] = timestamps
 
             if len(timestamps) >= limit:
                 oldest = timestamps[0]
@@ -112,6 +131,17 @@ class InMemoryWindowRateLimiter:
     def clear(self) -> None:
         with self._lock:
             self._events_by_key.clear()
+            self._checks = 0
+
+    def _prune_stale_keys_locked(self, cutoff: float) -> None:
+        stale_keys: list[str] = []
+        for key, timestamps in self._events_by_key.items():
+            while timestamps and timestamps[0] <= cutoff:
+                timestamps.popleft()
+            if not timestamps:
+                stale_keys.append(key)
+        for stale_key in stale_keys:
+            self._events_by_key.pop(stale_key, None)
 
 
 class RedisWindowRateLimiter:
@@ -190,10 +220,12 @@ return current
 
 
 class ResilientRateLimiter:
-    def __init__(self, *, primary, fallback) -> None:
+    def __init__(self, *, primary, fallback, relog_every_failures: int = 10) -> None:
         self._primary = primary
         self._fallback = fallback
-        self._warning_emitted = False
+        self._relog_every_failures = max(1, relog_every_failures)
+        self._consecutive_failures = 0
+        self._last_error_type: str | None = None
 
     def check(
         self,
@@ -203,23 +235,41 @@ class ResilientRateLimiter:
         window_seconds: int,
     ) -> RateLimitDecision:
         try:
-            return self._primary.check(
+            decision = self._primary.check(
                 key=key,
                 limit=limit,
                 window_seconds=window_seconds,
             )
+            if self._consecutive_failures > 0:
+                logger.info(
+                    "query_rate_limit_redis_recovered",
+                    extra={
+                        "redis_target": redis_target(),
+                        "failed_attempts_before_recovery": self._consecutive_failures,
+                    },
+                )
+            self._consecutive_failures = 0
+            self._last_error_type = None
+            return decision
         except Exception as exc:
-            if not self._warning_emitted:
-                self._warning_emitted = True
+            self._consecutive_failures += 1
+            error_type = type(exc).__name__
+            should_log = (
+                self._consecutive_failures == 1
+                or error_type != self._last_error_type
+                or self._consecutive_failures % self._relog_every_failures == 0
+            )
+            if should_log:
                 logger.warning(
                     "query_rate_limit_redis_unavailable_fallback_memory",
                     extra={
                         "redis_target": redis_target(),
-                        "error_type": type(exc).__name__,
-                        "error_message": str(exc),
+                        "error_type": error_type,
+                        "consecutive_failures": self._consecutive_failures,
                         "fallback_backend": "memory",
                     },
                 )
+            self._last_error_type = error_type
             return self._fallback.check(
                 key=key,
                 limit=limit,
@@ -237,7 +287,6 @@ def build_query_rate_limiter():
             extra={
                 "redis_target": redis_target(),
                 "error_type": type(exc).__name__,
-                "error_message": str(exc),
                 "fallback_backend": "memory",
             },
         )

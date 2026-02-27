@@ -8,7 +8,7 @@ from app import main as app_main
 from app import rate_limit as rate_limit_module
 from app.auth import UserContext
 from app.models import Chunk
-from app.rate_limit import InMemoryWindowRateLimiter, RedisWindowRateLimiter
+from app.rate_limit import InMemoryWindowRateLimiter, RateLimitDecision, RedisWindowRateLimiter
 from app.retrieval import RetrievalResult
 from app.schemas import QueryRequest
 
@@ -65,6 +65,33 @@ class _FakeRedisClient:
             return self._counts[key]
 
         return _run
+
+
+def test_inmemory_rate_limiter_prunes_inactive_keys_on_cleanup() -> None:
+    clock = _FakeClock()
+    limiter = InMemoryWindowRateLimiter(now_fn=clock.now, cleanup_every_checks=1)
+
+    limiter.check(key="workspace-a", limit=10, window_seconds=60)
+    limiter.check(key="workspace-b", limit=10, window_seconds=60)
+    assert set(limiter._events_by_key.keys()) == {"workspace-a", "workspace-b"}
+
+    clock.advance(61)
+    limiter.check(key="workspace-c", limit=10, window_seconds=60)
+
+    assert set(limiter._events_by_key.keys()) == {"workspace-c"}
+    assert len(limiter._events_by_key["workspace-c"]) == 1
+
+
+def test_inmemory_rate_limiter_keeps_active_keys() -> None:
+    clock = _FakeClock()
+    limiter = InMemoryWindowRateLimiter(now_fn=clock.now, cleanup_every_checks=1)
+
+    limiter.check(key="workspace-a", limit=10, window_seconds=60)
+    clock.advance(30)
+    limiter.check(key="workspace-a", limit=10, window_seconds=60)
+    limiter.check(key="workspace-b", limit=10, window_seconds=60)
+
+    assert set(limiter._events_by_key.keys()) == {"workspace-a", "workspace-b"}
 
 
 def test_query_rate_limit_is_workspace_scoped(monkeypatch) -> None:
@@ -199,8 +226,37 @@ def test_resilient_rate_limit_falls_back_to_memory_once(monkeypatch) -> None:
     assert message == "query_rate_limit_redis_unavailable_fallback_memory"
     assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
     assert payload["extra"]["error_type"] == "RuntimeError"
-    assert payload["extra"]["error_message"] == "redis unavailable"
+    assert payload["extra"]["consecutive_failures"] == 1
     assert payload["extra"]["fallback_backend"] == "memory"
+
+
+def test_resilient_rate_limit_logs_periodically_on_persistent_failures(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    class _FailingLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int):
+            raise RuntimeError("redis unavailable")
+
+    clock = _FakeClock()
+    fallback = InMemoryWindowRateLimiter(now_fn=clock.now)
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+
+    limiter = rate_limit_module.ResilientRateLimiter(
+        primary=_FailingLimiter(),
+        fallback=fallback,
+        relog_every_failures=3,
+    )
+
+    for _ in range(6):
+        limiter.check(key="workspace-1", limit=100, window_seconds=60)
+
+    assert len(warnings) == 3
+    assert [entry[1]["extra"]["consecutive_failures"] for entry in warnings] == [1, 3, 6]
 
 
 def test_build_query_rate_limiter_returns_resilient_wrapper(monkeypatch) -> None:
@@ -245,9 +301,44 @@ def test_build_query_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) 
     assert message == "query_rate_limit_redis_init_failed_fallback_memory"
     assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
     assert payload["extra"]["error_type"] == "RuntimeError"
-    assert payload["extra"]["error_message"] == "redis client init failed"
 
 
 def test_redis_target_redacts_credentials(monkeypatch) -> None:
     monkeypatch.setenv("RAG_REDIS_URL", "redis://user:secret@redis.internal:6380/2")
     assert rate_limit_module.redis_target() == "redis://redis.internal:6380/2"
+
+
+def test_query_rate_limit_short_circuits_before_workspace_data_check(monkeypatch) -> None:
+    class _NoDataStore:
+        def has_workspace_data(self, workspace_id: str) -> bool:
+            raise AssertionError("has_workspace_data should not be called when rate-limited")
+
+    class _AlwaysDenyLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=False,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=0,
+                retry_after_seconds=30,
+            )
+
+    events = []
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "chunk_store", _NoDataStore())
+    monkeypatch.setattr(app_main, "query_rate_limiter", _AlwaysDenyLimiter())
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    request = QueryRequest(question="test", top_k=1)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.query(workspace_id, request, user)
+
+    assert exc_info.value.status_code == 429
+    assert events and events[0]["payload"]["reason"] == "rate_limited"

@@ -558,9 +558,6 @@ def query(
     role = require_workspace_role(workspace_id, current_user)
     allowed_labels = allowed_labels_for_role(role)
 
-    if not chunk_store.has_workspace_data(workspace_id):
-        raise HTTPException(status_code=400, detail="No data ingested yet.")
-
     pii_enabled = pii_redaction_enabled()
     configured_pii_backend = pii_backend()
     rate_limit_enabled = query_rate_limit_enabled()
@@ -598,6 +595,9 @@ def query(
                 headers={"Retry-After": str(rate_limit.retry_after_seconds)},
             )
         rate_limit_remaining = rate_limit.remaining
+
+    if not chunk_store.has_workspace_data(workspace_id):
+        raise HTTPException(status_code=400, detail="No data ingested yet.")
 
     query_embedding = embed_text(request.question)
     results = chunk_store.search(
