@@ -4,6 +4,9 @@ on:
   push:
     branches: [ "main" ]
   pull_request:
+  schedule:
+    # Nightly full pipeline run on default branch (UTC).
+    - cron: "10 1 * * *"
 
 permissions:
   contents: read
