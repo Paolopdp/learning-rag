@@ -23,7 +23,7 @@ jobs:
       RAG_GARAK_KEEP_RAW_ARTIFACTS: "0"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Python
         uses: actions/setup-python@v5
