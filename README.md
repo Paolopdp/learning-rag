@@ -221,6 +221,11 @@ Environment variables:
 - `RAG_QUERY_RATE_LIMIT_REQUESTS` to configure max queries per workspace in window (default `20`)
 - `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
 - `RAG_REDIS_URL` to configure Redis/Valkey endpoint for query throttling (default `redis://localhost:6379/0`)
+- `RAG_INGEST_MAX_FILES` max files accepted per upload ingest request (default `10`)
+- `RAG_INGEST_MAX_FILE_BYTES` max bytes per uploaded file (default `5242880`)
+- `RAG_INGEST_MAX_PDF_PAGES` max parsed pages per uploaded PDF (default `40`)
+- `RAG_INGEST_MAX_PDF_TEXT_CHARS` max extracted text characters per uploaded PDF (default `300000`)
+- `RAG_DOCUMENT_TITLE_MAX_LENGTH` max document title length accepted by ingestion/store (default `255`)
 
 Password hashing:
 - User passwords are hashed with Argon2id (`argon2-cffi`).

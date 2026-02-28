@@ -7,7 +7,7 @@ import uuid
 import numpy as np
 from sqlalchemy import delete, select, update
 
-from app.config import store_backend
+from app.config import document_title_max_length, store_backend
 from app.db import SessionLocal
 from app.models import Chunk, Document, DocumentMetadata
 from app.retrieval import RetrievalResult, top_k_chunks
@@ -49,12 +49,23 @@ class InMemoryChunkStore:
         documents: list[Document],
         new_chunks: list[Chunk],
         new_embeddings: np.ndarray,
+        *,
+        replace_existing: bool = False,
+        workspace_id: str | None = None,
     ) -> None:
         if len(new_chunks) != len(new_embeddings):
             raise ValueError("Chunks and embeddings must be the same length.")
         for doc in documents:
             if not doc.workspace_id:
                 raise ValueError("Document is missing workspace_id.")
+            _validate_document_title(doc)
+        target_workspace_id = _resolve_workspace_id(
+            documents=documents,
+            workspace_id=workspace_id,
+            replace_existing=replace_existing,
+        )
+        if replace_existing and target_workspace_id:
+            self.clear_workspace(target_workspace_id)
         incoming_document_ids = {document.document_id for document in documents}
         self.documents = [
             document
@@ -200,6 +211,9 @@ class PostgresChunkStore:
         documents: list[Document],
         new_chunks: list[Chunk],
         new_embeddings: np.ndarray,
+        *,
+        replace_existing: bool = False,
+        workspace_id: str | None = None,
     ) -> None:
         if len(new_chunks) != len(new_embeddings):
             raise ValueError("Chunks and embeddings must be the same length.")
@@ -208,8 +222,26 @@ class PostgresChunkStore:
             return
         if not documents and new_chunks:
             raise ValueError("Documents required when adding chunks.")
+        target_workspace_id = _resolve_workspace_id(
+            documents=documents,
+            workspace_id=workspace_id,
+            replace_existing=replace_existing,
+        )
+        for doc in documents:
+            _validate_document_title(doc)
 
         with SessionLocal() as session:
+            if replace_existing and target_workspace_id:
+                session.execute(
+                    delete(ChunkORM).where(
+                        ChunkORM.workspace_id == uuid.UUID(target_workspace_id)
+                    )
+                )
+                session.execute(
+                    delete(DocumentORM).where(
+                        DocumentORM.workspace_id == uuid.UUID(target_workspace_id)
+                    )
+                )
             doc_map: dict[uuid.UUID, DocumentORM] = {}
             for doc in documents:
                 if not doc.workspace_id:
@@ -415,3 +447,36 @@ def get_chunk_store():
     if backend == "postgres":
         return PostgresChunkStore()
     return InMemoryChunkStore()
+
+
+def _resolve_workspace_id(
+    *,
+    documents: list[Document],
+    workspace_id: str | None,
+    replace_existing: bool,
+) -> str | None:
+    if documents:
+        workspace_ids = {document.workspace_id for document in documents}
+        if None in workspace_ids:
+            raise ValueError("Document is missing workspace_id.")
+        if len(workspace_ids) > 1:
+            raise ValueError("All documents must belong to the same workspace.")
+    if workspace_id is not None:
+        if documents and workspace_id not in {document.workspace_id for document in documents}:
+            raise ValueError("Provided workspace_id does not match document workspace.")
+        return workspace_id
+    if not replace_existing:
+        return None
+    if not documents:
+        raise ValueError("Workspace id is required when replace_existing is enabled.")
+    derived_workspace_id = documents[0].workspace_id
+    if not derived_workspace_id:
+        raise ValueError("Document is missing workspace_id.")
+    return derived_workspace_id
+
+
+def _validate_document_title(document: Document) -> None:
+    if len(document.title) > document_title_max_length():
+        raise ValueError(
+            f"Document title exceeds max length ({document_title_max_length()})."
+        )

@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
 
-from app.config import embedding_dim
+from app.config import document_title_max_length, embedding_dim
 
 
 class Base(DeclarativeBase):
@@ -23,7 +23,7 @@ class DocumentORM(Base):
     workspace_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False
     )
-    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    title: Mapped[str] = mapped_column(String(document_title_max_length()), nullable=False)
     source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     license: Mapped[str | None] = mapped_column(Text, nullable=True)
     accessed_at: Mapped[date | None] = mapped_column(Date, nullable=True)

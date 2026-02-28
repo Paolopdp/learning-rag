@@ -10,6 +10,8 @@ from app.auth import UserContext, create_access_token, get_current_user, hash_pa
 from app.config import (
     auth_disabled,
     cors_origins,
+    ingest_max_file_bytes,
+    ingest_max_files,
     store_backend,
     system_workspace_id,
     wikipedia_it_dir,
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 
 chunk_store = get_chunk_store()
 query_rate_limiter = build_query_rate_limiter()
+UPLOAD_READ_CHUNK_SIZE = 64 * 1024
 
 DEFAULT_DOCUMENTS_LIMIT = 50
 MAX_DOCUMENTS_LIMIT = 200
@@ -161,6 +164,20 @@ def allowed_labels_for_role(role: str) -> set[str]:
         },
     )
     return {CLASSIFICATION_PUBLIC}
+
+
+async def read_upload_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
+    content = bytearray()
+    while True:
+        chunk = await upload.read(UPLOAD_READ_CHUNK_SIZE)
+        if not chunk:
+            break
+        content.extend(chunk)
+        if len(content) > max_bytes:
+            raise ValueError(
+                f"Uploaded file is too large. Maximum size is {max_bytes} bytes."
+            )
+    return bytes(content)
 
 
 @app.post("/auth/register", response_model=AuthResponse)
@@ -547,8 +564,28 @@ def ingest_demo(
     documents = load_documents_from_dir(wikipedia_it_dir(), workspace_id=workspace_id)
     chunks = chunk_documents(documents)
     embeddings = embed_texts([chunk.content for chunk in chunks])
-    chunk_store.clear_workspace(workspace_id)
-    chunk_store.add_many(documents, chunks, embeddings)
+    try:
+        chunk_store.add_many(
+            documents,
+            chunks,
+            embeddings,
+            replace_existing=True,
+            workspace_id=workspace_id,
+        )
+    except ValueError as exc:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="ingest_demo",
+            payload={
+                "documents": len(documents),
+                "chunks": len(chunks),
+                "source": "wikipedia_it",
+                "outcome": "failure",
+                "reason": "store_validation_failed",
+            },
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_event(
         workspace_id=workspace_id,
         user_id=None if auth_disabled() else current_user.id,
@@ -573,6 +610,8 @@ async def ingest_upload(
     workspace_uuid = require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
     require_workspace_exists_for_postgres(workspace_uuid)
+    max_files = ingest_max_files()
+    max_file_bytes = ingest_max_file_bytes()
 
     if not files:
         log_event(
@@ -586,11 +625,28 @@ async def ingest_upload(
             },
         )
         raise HTTPException(status_code=400, detail="No files provided.")
+    if len(files) > max_files:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="ingest_upload",
+            payload={
+                "outcome": "failure",
+                "reason": "too_many_files",
+                "files": len(files),
+                "max_files": max_files,
+                "replace_existing": replace_existing,
+            },
+        )
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many files. Maximum allowed is {max_files}.",
+        )
 
     documents = []
     for upload in files:
         try:
-            content = await upload.read()
+            content = await read_upload_with_limit(upload, max_file_bytes)
             document = parse_uploaded_file(
                 filename=upload.filename or "",
                 content=content,
@@ -619,9 +675,27 @@ async def ingest_upload(
 
     chunks = chunk_documents(documents)
     embeddings = embed_texts([chunk.content for chunk in chunks])
-    if replace_existing:
-        chunk_store.clear_workspace(workspace_id)
-    chunk_store.add_many(documents, chunks, embeddings)
+    try:
+        chunk_store.add_many(
+            documents,
+            chunks,
+            embeddings,
+            replace_existing=replace_existing,
+            workspace_id=workspace_id,
+        )
+    except ValueError as exc:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="ingest_upload",
+            payload={
+                "outcome": "failure",
+                "reason": "store_validation_failed",
+                "files": len(files),
+                "replace_existing": replace_existing,
+            },
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     log_event(
         workspace_id=workspace_id,
         user_id=None if auth_disabled() else current_user.id,

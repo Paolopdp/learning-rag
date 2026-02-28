@@ -31,6 +31,26 @@ def embedding_dim() -> int:
     return int(os.getenv("RAG_EMBEDDING_DIM", "384"))
 
 
+def document_title_max_length() -> int:
+    return max(1, int(os.getenv("RAG_DOCUMENT_TITLE_MAX_LENGTH", "255")))
+
+
+def ingest_max_files() -> int:
+    return max(1, int(os.getenv("RAG_INGEST_MAX_FILES", "10")))
+
+
+def ingest_max_file_bytes() -> int:
+    return max(1, int(os.getenv("RAG_INGEST_MAX_FILE_BYTES", "5242880")))
+
+
+def ingest_max_pdf_pages() -> int:
+    return max(1, int(os.getenv("RAG_INGEST_MAX_PDF_PAGES", "40")))
+
+
+def ingest_max_pdf_text_chars() -> int:
+    return max(1, int(os.getenv("RAG_INGEST_MAX_PDF_TEXT_CHARS", "300000")))
+
+
 def cors_origins() -> list[str]:
     origins = os.getenv("RAG_CORS_ORIGINS")
     if origins:

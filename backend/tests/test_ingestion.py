@@ -141,8 +141,12 @@ def test_parse_uploaded_pdf_file_uses_pdf_extractor(monkeypatch) -> None:
     monkeypatch.setattr(
         ingestion_module,
         "_extract_pdf_text",
-        lambda _content: "Testo estratto dal PDF.",
+        lambda _content, *, max_pages, max_text_chars: (
+            f"Testo estratto dal PDF ({max_pages}/{max_text_chars})."
+        ),
     )
+    monkeypatch.setenv("RAG_INGEST_MAX_PDF_PAGES", "12")
+    monkeypatch.setenv("RAG_INGEST_MAX_PDF_TEXT_CHARS", "1200")
 
     doc = parse_uploaded_file(
         filename="manual.pdf",
@@ -150,4 +154,14 @@ def test_parse_uploaded_pdf_file_uses_pdf_extractor(monkeypatch) -> None:
         workspace_id="workspace-1",
     )
     assert doc.title == "manual"
-    assert doc.text == "Testo estratto dal PDF."
+    assert doc.text == "Testo estratto dal PDF (12/1200)."
+
+
+def test_parse_uploaded_file_rejects_overlong_title(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_DOCUMENT_TITLE_MAX_LENGTH", "12")
+    with pytest.raises(ValueError, match="Document title is too long"):
+        parse_uploaded_file(
+            filename="this_title_is_too_long.txt",
+            content=b"contenuto",
+            workspace_id="workspace-1",
+        )

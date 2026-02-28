@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
 
+from app.config import (
+    document_title_max_length,
+    ingest_max_pdf_pages,
+    ingest_max_pdf_text_chars,
+)
 from app.models import Chunk, Document
 from app.pii import pii_ingest_redaction_enabled, redact_text
 
@@ -61,12 +66,16 @@ def parse_uploaded_file(
     if suffix in _TEXT_UPLOAD_EXTENSIONS:
         raw_text = _decode_uploaded_text(content)
     elif suffix == _PDF_UPLOAD_EXTENSION:
-        raw_text = _extract_pdf_text(content)
+        raw_text = _extract_pdf_text(
+            content,
+            max_pages=ingest_max_pdf_pages(),
+            max_text_chars=ingest_max_pdf_text_chars(),
+        )
     else:
         raise ValueError("Unsupported file type. Allowed: .txt, .md, .markdown, .pdf.")
 
     return _build_document(
-        title=Path(filename).stem or "uploaded_document",
+        title=_derive_uploaded_title(filename),
         source_url=None,
         license_text=None,
         accessed_at=None,
@@ -192,6 +201,12 @@ def _build_document(
     raw_text: str,
     workspace_id: str | None,
 ) -> Document:
+    clean_title = title.strip() or "uploaded_document"
+    if len(clean_title) > document_title_max_length():
+        raise ValueError(
+            f"Document title is too long. Maximum length is {document_title_max_length()} characters."
+        )
+
     text = raw_text.strip()
     if not text:
         raise ValueError("Empty document body.")
@@ -202,7 +217,7 @@ def _build_document(
 
     return Document(
         workspace_id=workspace_id,
-        title=title,
+        title=clean_title,
         source_url=source_url,
         license=license_text,
         accessed_at=accessed_at,
@@ -217,7 +232,12 @@ def _decode_uploaded_text(content: bytes) -> str:
         raise ValueError("Uploaded text files must be UTF-8 encoded.") from exc
 
 
-def _extract_pdf_text(content: bytes) -> str:
+def _extract_pdf_text(
+    content: bytes,
+    *,
+    max_pages: int,
+    max_text_chars: int,
+) -> str:
     try:
         from pypdf import PdfReader
     except ImportError as exc:
@@ -229,9 +249,23 @@ def _extract_pdf_text(content: bytes) -> str:
         raise ValueError("Unable to parse PDF file.") from exc
 
     page_texts: list[str] = []
+    extracted_chars = 0
     try:
-        for page in reader.pages:
-            page_texts.append(page.extract_text() or "")
+        for index, page in enumerate(reader.pages):
+            if index >= max_pages:
+                raise ValueError(
+                    f"PDF page limit exceeded. Maximum allowed pages is {max_pages}."
+                )
+            page_text = page.extract_text() or ""
+            extracted_chars += len(page_text)
+            if extracted_chars > max_text_chars:
+                raise ValueError(
+                    "PDF extracted text exceeds maximum allowed size "
+                    f"({max_text_chars} characters)."
+                )
+            page_texts.append(page_text)
+    except ValueError:
+        raise
     except Exception as exc:  # pragma: no cover - parser internals vary by file
         raise ValueError("Unable to extract text from PDF file.") from exc
 
@@ -239,6 +273,13 @@ def _extract_pdf_text(content: bytes) -> str:
     if not merged:
         raise ValueError("PDF does not contain extractable text.")
     return merged
+
+
+def _derive_uploaded_title(filename: str) -> str:
+    stem = Path(filename).stem.strip()
+    if not stem:
+        return "uploaded_document"
+    return stem
 
 
 # Debug helper for quick inspection during development.
