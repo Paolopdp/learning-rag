@@ -88,6 +88,46 @@ def test_ingest_upload_rejects_unsupported_files_and_logs_failure(monkeypatch) -
     assert upload_events[0]["payload"]["invalid_files_count"] == 1
 
 
+def test_ingest_upload_skips_body_read_for_unsupported_suffix(monkeypatch) -> None:
+    async def fail_read(_upload, _max_bytes):
+        raise AssertionError("Body should not be read for unsupported file extension.")
+
+    monkeypatch.setattr(app_main, "read_upload_with_limit", fail_read)
+
+    client = TestClient(app)
+    workspace_id = "39393939-3333-3333-3333-333333333333"
+    response = client.post(
+        f"/workspaces/{workspace_id}/ingest",
+        files=[("files", ("bad.zip", b"should-not-be-read", "application/zip"))],
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "One or more uploaded files are invalid."
+    assert detail["errors"][0]["file_name"] == "bad.zip"
+    assert "Unsupported file type" in detail["errors"][0]["error"]
+
+
+def test_ingest_upload_reports_blank_file_name_without_read(monkeypatch) -> None:
+    async def fail_read(_upload, _max_bytes):
+        raise AssertionError("Body should not be read when file name is blank.")
+
+    monkeypatch.setattr(app_main, "read_upload_with_limit", fail_read)
+
+    client = TestClient(app)
+    workspace_id = "40404040-4444-4444-4444-444444444444"
+    response = client.post(
+        f"/workspaces/{workspace_id}/ingest",
+        files=[("files", ("   ", b"body", "text/plain"))],
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "One or more uploaded files are invalid."
+    assert detail["errors"][0]["file_name"] == "<unnamed>"
+    assert "Missing file name" in detail["errors"][0]["error"]
+
+
 def test_ingest_upload_logs_success_outcome(monkeypatch) -> None:
     events = []
     monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))

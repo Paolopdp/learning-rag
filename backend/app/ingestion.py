@@ -24,6 +24,7 @@ _HEADER_KEYS = {
 _ALLOWED_SOURCE_URL_SCHEMES = {"http", "https"}
 _TEXT_UPLOAD_EXTENSIONS = {".txt", ".md", ".markdown"}
 _PDF_UPLOAD_EXTENSION = ".pdf"
+_UPLOAD_TYPE_ERROR = "Unsupported file type. Allowed: .txt, .md, .markdown, .pdf."
 
 
 def load_documents_from_dir(directory: Path, workspace_id: str) -> list[Document]:
@@ -59,10 +60,7 @@ def parse_uploaded_file(
     content: bytes,
     workspace_id: str | None = None,
 ) -> Document:
-    if not filename.strip():
-        raise ValueError("Missing file name.")
-
-    suffix = Path(filename).suffix.lower()
+    suffix = validate_upload_filename(filename)
     if suffix in _TEXT_UPLOAD_EXTENSIONS:
         raw_text = _decode_uploaded_text(content)
     elif suffix == _PDF_UPLOAD_EXTENSION:
@@ -72,7 +70,7 @@ def parse_uploaded_file(
             max_text_chars=ingest_max_pdf_text_chars(),
         )
     else:
-        raise ValueError("Unsupported file type. Allowed: .txt, .md, .markdown, .pdf.")
+        raise ValueError(_UPLOAD_TYPE_ERROR)
 
     return _build_document(
         title=_derive_uploaded_title(filename),
@@ -280,6 +278,16 @@ def _derive_uploaded_title(filename: str) -> str:
     if not stem:
         return "uploaded_document"
     return stem
+
+
+def validate_upload_filename(filename: str) -> str:
+    candidate = filename.strip()
+    if not candidate:
+        raise ValueError("Missing file name.")
+    suffix = Path(candidate).suffix.lower()
+    if suffix not in (_TEXT_UPLOAD_EXTENSIONS | {_PDF_UPLOAD_EXTENSION}):
+        raise ValueError(_UPLOAD_TYPE_ERROR)
+    return suffix
 
 
 # Debug helper for quick inspection during development.

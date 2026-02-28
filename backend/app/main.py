@@ -18,7 +18,12 @@ from app.config import (
 )
 from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
-from app.ingestion import chunk_documents, load_documents_from_dir, parse_uploaded_file
+from app.ingestion import (
+    chunk_documents,
+    load_documents_from_dir,
+    parse_uploaded_file,
+    validate_upload_filename,
+)
 from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
 from app.pii import merge_redaction_counts, pii_backend, pii_redaction_enabled, redact_text
@@ -646,17 +651,31 @@ async def ingest_upload(
     documents = []
     invalid_files: list[dict[str, str]] = []
     for upload in files:
+        file_name = upload.filename or ""
+        file_name_display = file_name.strip() or "<unnamed>"
+        try:
+            validate_upload_filename(file_name)
+        except ValueError as exc:
+            invalid_files.append(
+                {
+                    "file_name": file_name_display,
+                    "error": str(exc),
+                }
+            )
+            await upload.close()
+            continue
+
         try:
             content = await read_upload_with_limit(upload, max_file_bytes)
             document = parse_uploaded_file(
-                filename=upload.filename or "",
+                filename=file_name,
                 content=content,
                 workspace_id=workspace_id,
             )
         except ValueError as exc:
             invalid_files.append(
                 {
-                    "file_name": upload.filename or "<unnamed>",
+                    "file_name": file_name_display,
                     "error": str(exc),
                 }
             )

@@ -4,7 +4,12 @@ from pathlib import Path
 import pytest
 
 from app import ingestion as ingestion_module
-from app.ingestion import chunk_document, parse_uploaded_file, parse_wikipedia_file
+from app.ingestion import (
+    chunk_document,
+    parse_uploaded_file,
+    parse_wikipedia_file,
+    validate_upload_filename,
+)
 from app.models import Document
 
 
@@ -126,6 +131,16 @@ def test_parse_uploaded_file_rejects_unsupported_extension() -> None:
             content=b"payload",
             workspace_id="workspace-1",
         )
+
+
+def test_validate_upload_filename_rejects_missing_name() -> None:
+    with pytest.raises(ValueError, match="Missing file name"):
+        validate_upload_filename("  ")
+
+
+def test_validate_upload_filename_rejects_unsupported_extension() -> None:
+    with pytest.raises(ValueError, match="Unsupported file type"):
+        validate_upload_filename("archive.zip")
 
 
 def test_parse_uploaded_file_rejects_non_utf8_text() -> None:
