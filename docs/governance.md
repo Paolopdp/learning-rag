@@ -66,6 +66,7 @@ This project includes a minimal governance baseline focused on traceability and 
 ## Evaluation Gate Policy
 - Gate levels and promotion rules are documented in `docs/eval-gates.md`.
 - Current blocking gates include tests, policy smoke, promptfoo core invariants, and security scans.
+- Presidio runtime smoke currently runs on Python `3.13` due an upstream spaCy Python `3.14` compatibility issue (`https://github.com/explosion/spaCy/issues/13895`).
 
 ## Query Security Testing (Garak Baseline)
 - Runner: `scripts/run_garak_scan.sh`

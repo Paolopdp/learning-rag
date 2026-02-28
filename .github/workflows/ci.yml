@@ -181,7 +181,10 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.14"
+          # Presidio -> spaCy currently hits a Python 3.14 import/runtime issue:
+          # https://github.com/explosion/spaCy/issues/13895
+          # Keep this smoke on 3.13 until upstream compatibility is confirmed.
+          python-version: "3.13"
 
       - name: Install uv
         run: pip install uv

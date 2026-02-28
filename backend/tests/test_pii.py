@@ -81,7 +81,10 @@ def test_redact_text_uses_presidio_when_available(monkeypatch) -> None:
 
 
 def test_redact_text_with_presidio_runtime_when_installed(monkeypatch) -> None:
-    pytest.importorskip("presidio_analyzer")
+    try:
+        __import__("presidio_analyzer")
+    except Exception as exc:
+        pytest.skip(f"Presidio runtime unavailable: {exc.__class__.__name__}")
     monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "1")
     monkeypatch.setenv("RAG_PII_BACKEND", "presidio")
 

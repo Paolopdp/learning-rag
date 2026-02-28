@@ -220,6 +220,10 @@ cd backend
 source .venv/bin/activate
 uv pip install -e ".[dev,pii]"
 ```
+Compatibility note:
+- Use Python `3.13` for the optional Presidio runtime path for now.
+- Python `3.14` currently has an upstream spaCy compatibility issue tracked at `https://github.com/explosion/spaCy/issues/13895`.
+
 If Presidio dependencies/runtime are missing, the backend logs a structured warning once and falls back to regex redaction.
 
 ## CI Security Checks
