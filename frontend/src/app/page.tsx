@@ -171,6 +171,46 @@ export default function Home() {
       return null;
     }
   };
+  const extractApiError = (payload: unknown, fallback: string): string => {
+    if (!payload || typeof payload !== "object") {
+      return fallback;
+    }
+    const detail = (payload as { detail?: unknown }).detail;
+    if (typeof detail === "string") {
+      return detail;
+    }
+    if (!detail || typeof detail !== "object") {
+      return fallback;
+    }
+
+    const message =
+      typeof (detail as { message?: unknown }).message === "string"
+        ? (detail as { message: string }).message
+        : fallback;
+    const errors = (detail as { errors?: unknown }).errors;
+    if (!Array.isArray(errors) || errors.length === 0) {
+      return message;
+    }
+
+    const parts = errors
+      .map((item) => {
+        if (!item || typeof item !== "object") {
+          return null;
+        }
+        const fileName = (item as { file_name?: unknown }).file_name;
+        const reason = (item as { error?: unknown }).error;
+        if (typeof fileName !== "string" || typeof reason !== "string") {
+          return null;
+        }
+        return `${fileName}: ${reason}`;
+      })
+      .filter((value): value is string => Boolean(value));
+
+    if (parts.length === 0) {
+      return message;
+    }
+    return `${message} ${parts.join("; ")}`;
+  };
 
   const isReady = useMemo(
     () => Boolean(ingestInfo && ingestInfo.chunks > 0),
@@ -593,7 +633,7 @@ export default function Home() {
       );
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
-        throw new Error(payload?.detail ?? "Upload ingest failed.");
+        throw new Error(extractApiError(payload, "Upload ingest failed."));
       }
       const payload = (await response.json()) as IngestResponse;
       setIngestInfo(payload);

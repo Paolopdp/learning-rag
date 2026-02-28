@@ -75,12 +75,17 @@ def test_ingest_upload_rejects_unsupported_files_and_logs_failure(monkeypatch) -
     )
 
     assert response.status_code == 400
-    assert "Unsupported file type" in response.json()["detail"]
+    detail = response.json()["detail"]
+    assert detail["message"] == "One or more uploaded files are invalid."
+    assert len(detail["errors"]) == 1
+    assert detail["errors"][0]["file_name"] == "payload.zip"
+    assert "Unsupported file type" in detail["errors"][0]["error"]
 
     upload_events = [event for event in events if event["action"] == "ingest_upload"]
     assert len(upload_events) == 1
     assert upload_events[0]["payload"]["outcome"] == "failure"
-    assert upload_events[0]["payload"]["reason"] == "invalid_file"
+    assert upload_events[0]["payload"]["reason"] == "invalid_files"
+    assert upload_events[0]["payload"]["invalid_files_count"] == 1
 
 
 def test_ingest_upload_logs_success_outcome(monkeypatch) -> None:
@@ -115,7 +120,36 @@ def test_ingest_upload_rejects_file_too_large(monkeypatch) -> None:
     )
 
     assert response.status_code == 400
-    assert "too large" in response.json()["detail"].lower()
+    detail = response.json()["detail"]
+    assert detail["message"] == "One or more uploaded files are invalid."
+    assert len(detail["errors"]) == 1
+    assert detail["errors"][0]["file_name"] == "big.txt"
+    assert "too large" in detail["errors"][0]["error"].lower()
+
+
+def test_ingest_upload_aggregates_invalid_files_without_partial_write() -> None:
+    client = TestClient(app)
+    workspace_id = "88888888-8888-8888-8888-888888888888"
+
+    response = client.post(
+        f"/workspaces/{workspace_id}/ingest",
+        files=[
+            ("files", ("good.txt", b"contenuto valido", "text/plain")),
+            ("files", ("bad.zip", b"binary", "application/zip")),
+            ("files", ("bad2.zip", b"binary", "application/zip")),
+        ],
+    )
+
+    assert response.status_code == 400
+    detail = response.json()["detail"]
+    assert detail["message"] == "One or more uploaded files are invalid."
+    assert len(detail["errors"]) == 2
+    invalid_names = {item["file_name"] for item in detail["errors"]}
+    assert invalid_names == {"bad.zip", "bad2.zip"}
+
+    inventory = client.get(f"/workspaces/{workspace_id}/documents?limit=10&offset=0")
+    assert inventory.status_code == 200
+    assert inventory.json() == []
 
 
 def test_ingest_upload_rejects_too_many_files(monkeypatch) -> None:

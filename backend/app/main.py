@@ -644,6 +644,7 @@ async def ingest_upload(
         )
 
     documents = []
+    invalid_files: list[dict[str, str]] = []
     for upload in files:
         try:
             content = await read_upload_with_limit(upload, max_file_bytes)
@@ -653,25 +654,37 @@ async def ingest_upload(
                 workspace_id=workspace_id,
             )
         except ValueError as exc:
-            log_event(
-                workspace_id=workspace_id,
-                user_id=None if auth_disabled() else current_user.id,
-                action="ingest_upload",
-                payload={
-                    "outcome": "failure",
-                    "reason": "invalid_file",
-                    "file_extension": (
-                        (upload.filename or "").rsplit(".", 1)[-1].lower()
-                        if "." in (upload.filename or "")
-                        else ""
-                    ),
-                    "replace_existing": replace_existing,
-                },
+            invalid_files.append(
+                {
+                    "file_name": upload.filename or "<unnamed>",
+                    "error": str(exc),
+                }
             )
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            documents.append(document)
         finally:
             await upload.close()
-        documents.append(document)
+
+    if invalid_files:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="ingest_upload",
+            payload={
+                "outcome": "failure",
+                "reason": "invalid_files",
+                "invalid_files_count": len(invalid_files),
+                "valid_files_count": len(documents),
+                "replace_existing": replace_existing,
+            },
+        )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "One or more uploaded files are invalid.",
+                "errors": invalid_files,
+            },
+        )
 
     chunks = chunk_documents(documents)
     embeddings = embed_texts([chunk.content for chunk in chunks])
