@@ -1,16 +1,22 @@
 import logging
 import uuid
 
-from fastapi import Depends, FastAPI, HTTPException, Response, status
+from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
 from app.audit import audit_enabled, list_events, log_event
 from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
-from app.config import auth_disabled, cors_origins, system_workspace_id, wikipedia_it_dir
+from app.config import (
+    auth_disabled,
+    cors_origins,
+    store_backend,
+    system_workspace_id,
+    wikipedia_it_dir,
+)
 from app.db import SessionLocal
 from app.embeddings import embed_text, embed_texts
-from app.ingestion import chunk_documents, load_documents_from_dir
+from app.ingestion import chunk_documents, load_documents_from_dir, parse_uploaded_file
 from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
 from app.pii import merge_redaction_counts, pii_backend, pii_redaction_enabled, redact_text
@@ -133,6 +139,13 @@ def require_workspace_exists(session, workspace_uuid: uuid.UUID) -> None:
     workspace = session.get(WorkspaceORM, workspace_uuid)
     if workspace is None:
         raise HTTPException(status_code=404, detail="Workspace not found.")
+
+
+def require_workspace_exists_for_postgres(workspace_uuid: uuid.UUID) -> None:
+    if store_backend() != "postgres":
+        return
+    with SessionLocal() as session:
+        require_workspace_exists(session, workspace_uuid)
 
 
 def allowed_labels_for_role(role: str) -> set[str]:
@@ -527,8 +540,9 @@ def ingest_demo(
     workspace_id: str,
     current_user: UserContext = Depends(get_current_user),
 ) -> IngestResponse:
-    require_workspace_uuid(workspace_id)
+    workspace_uuid = require_workspace_uuid(workspace_id)
     require_workspace_role(workspace_id, current_user)
+    require_workspace_exists_for_postgres(workspace_uuid)
 
     documents = load_documents_from_dir(wikipedia_it_dir(), workspace_id=workspace_id)
     chunks = chunk_documents(documents)
@@ -543,6 +557,81 @@ def ingest_demo(
             "documents": len(documents),
             "chunks": len(chunks),
             "source": "wikipedia_it",
+            "outcome": "success",
+        },
+    )
+    return IngestResponse(documents=len(documents), chunks=len(chunks))
+
+
+@app.post("/workspaces/{workspace_id}/ingest", response_model=IngestResponse)
+async def ingest_upload(
+    workspace_id: str,
+    files: list[UploadFile] = File(...),
+    replace_existing: bool = False,
+    current_user: UserContext = Depends(get_current_user),
+) -> IngestResponse:
+    workspace_uuid = require_workspace_uuid(workspace_id)
+    require_workspace_role(workspace_id, current_user)
+    require_workspace_exists_for_postgres(workspace_uuid)
+
+    if not files:
+        log_event(
+            workspace_id=workspace_id,
+            user_id=None if auth_disabled() else current_user.id,
+            action="ingest_upload",
+            payload={
+                "outcome": "failure",
+                "reason": "no_files",
+                "replace_existing": replace_existing,
+            },
+        )
+        raise HTTPException(status_code=400, detail="No files provided.")
+
+    documents = []
+    for upload in files:
+        try:
+            content = await upload.read()
+            document = parse_uploaded_file(
+                filename=upload.filename or "",
+                content=content,
+                workspace_id=workspace_id,
+            )
+        except ValueError as exc:
+            log_event(
+                workspace_id=workspace_id,
+                user_id=None if auth_disabled() else current_user.id,
+                action="ingest_upload",
+                payload={
+                    "outcome": "failure",
+                    "reason": "invalid_file",
+                    "file_extension": (
+                        (upload.filename or "").rsplit(".", 1)[-1].lower()
+                        if "." in (upload.filename or "")
+                        else ""
+                    ),
+                    "replace_existing": replace_existing,
+                },
+            )
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        finally:
+            await upload.close()
+        documents.append(document)
+
+    chunks = chunk_documents(documents)
+    embeddings = embed_texts([chunk.content for chunk in chunks])
+    if replace_existing:
+        chunk_store.clear_workspace(workspace_id)
+    chunk_store.add_many(documents, chunks, embeddings)
+    log_event(
+        workspace_id=workspace_id,
+        user_id=None if auth_disabled() else current_user.id,
+        action="ingest_upload",
+        payload={
+            "documents": len(documents),
+            "chunks": len(chunks),
+            "files": len(files),
+            "replace_existing": replace_existing,
+            "outcome": "success",
         },
     )
     return IngestResponse(documents=len(documents), chunks=len(chunks))

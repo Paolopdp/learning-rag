@@ -8,7 +8,8 @@ Local-first, open-source RAG system focused on **secure-by-default** AI applicat
 ## Status
 - Backend MVP skeleton is live (auth + workspaces + citations).
 - First vertical slice: ingest -> chunk -> embed -> retrieve -> answer with citations.
-- Minimal frontend UI is available (auth, ingest/query, citations, audit log, document inventory, workspace members).
+- Upload ingestion is available for `.txt`, `.md`, `.markdown`, and `.pdf` files.
+- Minimal frontend UI is available (auth, upload/demo ingest, query, citations, audit log, document inventory, workspace members).
 
 ## Repo Layout
 - `backend/` FastAPI service (current focus)
@@ -87,7 +88,18 @@ curl -X POST http://127.0.0.1:8000/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"demo@local","password":"change-me-now"}'
 
-# Ingest the demo dataset (replace WORKSPACE_ID + TOKEN)
+# Upload one or more files (replace WORKSPACE_ID + TOKEN)
+curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/ingest \
+  -H "Authorization: Bearer TOKEN" \
+  -F "files=@/absolute/path/document1.txt" \
+  -F "files=@/absolute/path/document2.pdf"
+
+# Optional: replace existing workspace documents during upload ingest
+curl -X POST "http://127.0.0.1:8000/workspaces/WORKSPACE_ID/ingest?replace_existing=true" \
+  -H "Authorization: Bearer TOKEN" \
+  -F "files=@/absolute/path/document1.md"
+
+# Ingest the bundled demo dataset
 curl -X POST http://127.0.0.1:8000/workspaces/WORKSPACE_ID/ingest/demo \
   -H "Authorization: Bearer TOKEN"
 

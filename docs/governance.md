@@ -3,7 +3,7 @@
 This project includes a minimal governance baseline focused on traceability and safe defaults.
 
 ## What is logged
-- Event metadata for key actions (`auth_register`, `auth_login`, `ingest_demo`, `query`).
+- Event metadata for key actions (`auth_register`, `auth_login`, `ingest_demo`, `ingest_upload`, `query`).
 - Actor and scope fields (`user_id`, `workspace_id`) when available.
 - Event timestamp (`created_at`) and structured payload (`payload`).
 - Action outcome (`payload.outcome`) with values `success` or `failure`.
@@ -19,6 +19,7 @@ This project includes a minimal governance baseline focused on traceability and 
 - Pagination: currently limit-only (bounded server-side).
 
 ## Classification labels
+- Upload ingestion endpoint: `POST /workspaces/{workspace_id}/ingest` (multipart files)
 - Document inventory endpoint: `GET /workspaces/{workspace_id}/documents?limit=50&offset=0`
 - Classification update endpoint:
   `PATCH /workspaces/{workspace_id}/documents/{document_id}/classification`

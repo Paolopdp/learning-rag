@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
@@ -16,6 +17,8 @@ _HEADER_KEYS = {
     "accesso": "accessed_at",
 }
 _ALLOWED_SOURCE_URL_SCHEMES = {"http", "https"}
+_TEXT_UPLOAD_EXTENSIONS = {".txt", ".md", ".markdown"}
+_PDF_UPLOAD_EXTENSION = ".pdf"
 
 
 def load_documents_from_dir(directory: Path, workspace_id: str) -> list[Document]:
@@ -35,21 +38,40 @@ def parse_wikipedia_file(path: Path, workspace_id: str | None = None) -> Documen
     license_text = metadata.get("license")
     accessed_at = _parse_date(metadata.get("accessed_at"))
 
-    text = body.strip()
-    if not text:
-        raise ValueError(f"Empty document body: {path}")
-    text = redact_text(
-        text,
-        enabled=pii_ingest_redaction_enabled(),
-    ).text
-
-    return Document(
-        workspace_id=workspace_id,
+    return _build_document(
         title=title,
         source_url=source_url,
-        license=license_text,
+        license_text=license_text,
         accessed_at=accessed_at,
-        text=text,
+        raw_text=body,
+        workspace_id=workspace_id,
+    )
+
+
+def parse_uploaded_file(
+    *,
+    filename: str,
+    content: bytes,
+    workspace_id: str | None = None,
+) -> Document:
+    if not filename.strip():
+        raise ValueError("Missing file name.")
+
+    suffix = Path(filename).suffix.lower()
+    if suffix in _TEXT_UPLOAD_EXTENSIONS:
+        raw_text = _decode_uploaded_text(content)
+    elif suffix == _PDF_UPLOAD_EXTENSION:
+        raw_text = _extract_pdf_text(content)
+    else:
+        raise ValueError("Unsupported file type. Allowed: .txt, .md, .markdown, .pdf.")
+
+    return _build_document(
+        title=Path(filename).stem or "uploaded_document",
+        source_url=None,
+        license_text=None,
+        accessed_at=None,
+        raw_text=raw_text,
+        workspace_id=workspace_id,
     )
 
 
@@ -159,6 +181,64 @@ def _sanitize_source_url(value: str | None) -> str | None:
     if not parsed.netloc:
         return None
     return candidate
+
+
+def _build_document(
+    *,
+    title: str,
+    source_url: str | None,
+    license_text: str | None,
+    accessed_at: date | None,
+    raw_text: str,
+    workspace_id: str | None,
+) -> Document:
+    text = raw_text.strip()
+    if not text:
+        raise ValueError("Empty document body.")
+    text = redact_text(
+        text,
+        enabled=pii_ingest_redaction_enabled(),
+    ).text
+
+    return Document(
+        workspace_id=workspace_id,
+        title=title,
+        source_url=source_url,
+        license=license_text,
+        accessed_at=accessed_at,
+        text=text,
+    )
+
+
+def _decode_uploaded_text(content: bytes) -> str:
+    try:
+        return content.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Uploaded text files must be UTF-8 encoded.") from exc
+
+
+def _extract_pdf_text(content: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError as exc:
+        raise ValueError("PDF support is not available on this server.") from exc
+
+    try:
+        reader = PdfReader(BytesIO(content))
+    except Exception as exc:  # pragma: no cover - parser internals vary by file
+        raise ValueError("Unable to parse PDF file.") from exc
+
+    page_texts: list[str] = []
+    try:
+        for page in reader.pages:
+            page_texts.append(page.extract_text() or "")
+    except Exception as exc:  # pragma: no cover - parser internals vary by file
+        raise ValueError("Unable to extract text from PDF file.") from exc
+
+    merged = "\n".join(page_texts).strip()
+    if not merged:
+        raise ValueError("PDF does not contain extractable text.")
+    return merged
 
 
 # Debug helper for quick inspection during development.

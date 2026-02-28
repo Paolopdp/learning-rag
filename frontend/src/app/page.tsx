@@ -1,6 +1,6 @@
 "use client";
 
-import type { FormEvent } from "react";
+import type { ChangeEvent, FormEvent } from "react";
 import { useMemo, useState } from "react";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
@@ -126,6 +126,7 @@ export default function Home() {
   const [question, setQuestion] = useState(SAMPLE_QUESTIONS[0].text);
   const [topK, setTopK] = useState(3);
   const [ingestInfo, setIngestInfo] = useState<IngestResponse | null>(null);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [answer, setAnswer] = useState<string>("");
   const [citations, setCitations] = useState<Citation[]>([]);
   const [queryPolicy, setQueryPolicy] = useState<QueryPolicySummary | null>(null);
@@ -490,6 +491,7 @@ export default function Home() {
       setToken(payload.access_token);
       setCurrentUser(payload.user);
       setIngestInfo(null);
+      setUploadFiles([]);
       setAnswer("");
       setCitations([]);
       setQueryPolicy(null);
@@ -549,6 +551,7 @@ export default function Home() {
         await loadMembers(payload.access_token, selected.id);
       }
       setIngestInfo(null);
+      setUploadFiles([]);
       setAnswer("");
       setCitations([]);
       setQueryPolicy(null);
@@ -559,7 +562,52 @@ export default function Home() {
     }
   };
 
-  const handleIngest = async () => {
+  const handleUploadSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const selected = event.target.files ? Array.from(event.target.files) : [];
+    setUploadFiles(selected);
+  };
+
+  const handleIngestUpload = async () => {
+    if (!token || !workspace) {
+      setError("Login first to ingest data.");
+      return;
+    }
+    if (uploadFiles.length === 0) {
+      setError("Select at least one file to upload.");
+      return;
+    }
+    setBusyIngest(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      uploadFiles.forEach((file) => {
+        formData.append("files", file);
+      });
+      const response = await fetch(
+        `${API_BASE}/workspaces/${workspace.id}/ingest`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        }
+      );
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload?.detail ?? "Upload ingest failed.");
+      }
+      const payload = (await response.json()) as IngestResponse;
+      setIngestInfo(payload);
+      setUploadFiles([]);
+      await loadAudit(token, workspace.id);
+      await loadDocuments(token, workspace.id, { offset: 0 });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Upload ingest failed.");
+    } finally {
+      setBusyIngest(false);
+    }
+  };
+
+  const handleIngestDemo = async () => {
     if (!token || !workspace) {
       setError("Login first to ingest data.");
       return;
@@ -639,6 +687,7 @@ export default function Home() {
     setWorkspace(selected);
     setError(null);
     setIngestInfo(null);
+    setUploadFiles([]);
     setAnswer("");
     setCitations([]);
     setQueryPolicy(null);
@@ -665,8 +714,9 @@ export default function Home() {
                 </span>
               </h1>
               <p className="mt-4 max-w-2xl text-base text-[color:var(--muted)]">
-                A minimal end-to-end slice: ingest a demo dataset, ask a
-                question, and get a grounded answer with cited sources.
+                A minimal end-to-end slice: upload documents (or ingest a demo
+                dataset), ask a question, and get a grounded answer with cited
+                sources.
               </p>
             </div>
             <div className="rounded-full border border-[color:var(--border)] bg-white px-4 py-2 text-xs text-[color:var(--muted)] shadow-sm">
@@ -785,16 +835,41 @@ export default function Home() {
               2. Ingest + Query
             </h2>
             <p className="mt-2 text-sm text-[color:var(--muted)]">
-              Italian Wikipedia excerpts (SPID, PagoPA, ANPR, CAD).
+              Upload `.txt`, `.md`, or `.pdf` files, or ingest the demo Italian Wikipedia set.
             </p>
-            <button
-              type="button"
-              onClick={handleIngest}
-              disabled={busyIngest || !canUseApi}
-              className="mt-4 inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {busyIngest ? "Ingesting..." : "Ingest Demo"}
-            </button>
+            <div className="mt-4 space-y-3">
+              <input
+                type="file"
+                multiple
+                accept=".txt,.md,.markdown,.pdf"
+                onChange={handleUploadSelection}
+                disabled={busyIngest || !canUseApi}
+                className="w-full rounded-2xl border border-[color:var(--border)] bg-white px-4 py-2 text-sm"
+              />
+              <div className="text-xs text-[color:var(--muted)]">
+                {uploadFiles.length > 0
+                  ? `${uploadFiles.length} file(s) selected`
+                  : "No files selected."}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={handleIngestUpload}
+                  disabled={busyIngest || !canUseApi || uploadFiles.length === 0}
+                  className="inline-flex items-center gap-2 rounded-full bg-[color:var(--accent)] px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {busyIngest ? "Ingesting..." : "Ingest Upload"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleIngestDemo}
+                  disabled={busyIngest || !canUseApi}
+                  className="inline-flex items-center gap-2 rounded-full border border-[color:var(--border)] px-5 py-2 text-sm font-semibold text-[color:var(--foreground)]"
+                >
+                  {busyIngest ? "Ingesting..." : "Ingest Demo"}
+                </button>
+              </div>
+            </div>
             <div className="mt-4 grid gap-3 rounded-2xl bg-[#f9f4ee] px-4 py-4 text-sm text-[color:var(--muted)]">
               <div className="flex items-center justify-between">
                 <span>Documents</span>

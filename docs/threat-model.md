@@ -1,6 +1,6 @@
 # Threat Model (MVP)
 
-Last updated: 2026-02-22
+Last updated: 2026-02-27
 
 This document describes the current threat model for the local-first RAG assistant.
 It is an engineering artifact for design and review, not a legal/compliance claim.
@@ -39,7 +39,7 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 | TM-03 | Sensitive workspace member roster read without audit trace | `workspace_member_read` event with outcome success/failure | `backend/tests/test_workspace_members.py::test_add_workspace_member_and_list`, `backend/tests/test_workspace_members.py::test_list_workspace_members_fails_on_missing_user_record` | Mitigated (MVP) | Add integration-level assertion that audit endpoint returns this event after read. |
 | TM-04 | Sensitive document inventory read without audit trace | `document_inventory_read` audit event with limit/offset/returned/outcome | `backend/tests/test_document_inventory.py::test_document_inventory_logs_read_event` | Mitigated (MVP) | Add UI smoke assertion that inventory refresh creates audit entry. |
 | TM-05 | Email/account enumeration through member add flow | Generic user-facing error for unknown/already-member; detailed reason only in audit payload | `backend/tests/test_workspace_members.py::test_add_workspace_member_unknown_email_uses_generic_error` | Mitigated (MVP) | Keep generic errors across any future user lookup endpoints. |
-| TM-06 | Unsafe link schemes from ingested metadata (phishing/script URLs) | Ingestion sanitizes source URL to `http/https`; frontend renders only safe parsed `http/https` URLs | `backend/tests/test_ingestion.py::test_parse_wikipedia_file_rejects_unsafe_source_url` | Partially mitigated | Add domain allow/block policy and visual warning for external links. |
+| TM-06 | Unsafe link schemes from ingested metadata (phishing/script URLs) | Ingestion sanitizes source URL to `http/https` for metadata-bearing docs; frontend renders only safe parsed `http/https` URLs | `backend/tests/test_ingestion.py::test_parse_wikipedia_file_rejects_unsafe_source_url` | Partially mitigated | Add domain allow/block policy and visual warning for external links. |
 | TM-07 | Sensitive prompt/content leakage into audit logs | Audit payload key redaction (`question`, `content`, `text`, `source_url`, etc.); default outcome added | `backend/tests/test_audit.py::test_sanitize_payload_redacts_sensitive_keys`, `backend/tests/test_audit.py::test_log_event_adds_default_success_outcome` | Mitigated (MVP) | Expand redaction policy to nested payload structures. |
 | TM-08 | Invalid identifier input causing crashes / 500s | UUID guard functions return 400; classification map ignores invalid UUIDs with structured warning | `backend/tests/test_document_inventory.py::test_document_classification_rejects_invalid_document_id`, `backend/tests/test_store.py::test_postgres_classification_map_ignores_invalid_document_ids` | Mitigated (MVP) | Add one centralized error envelope for all validation failures. |
 | TM-09 | Retrieval policy bypass due to post-filter truncation | Policy applied in retrieval selection (`allowed_labels` passed to store search) | `backend/tests/test_query_policy.py::test_query_member_still_gets_allowed_results_with_many_forbidden_chunks`, `backend/tests/test_query_policy.py::test_query_filters_restricted_chunks_for_member` | Mitigated (MVP) | Add larger corpus perf+correctness benchmarks. |
@@ -57,7 +57,7 @@ It is an engineering artifact for design and review, not a legal/compliance clai
 - `promptfoo` is integrated and blocking on core invariants; `garak` workflows are integrated as non-blocking baselines.
 - LLM-generation `garak` coverage depends on CI model download/runtime availability and remains non-blocking.
 - Query rate limiting uses Redis/Valkey by default with in-memory fallback; policy tuning/alerting and global edge throttling are still not implemented.
-- Ingestion is demo-dataset based (`/ingest/demo`), not full upload/PDF pipeline yet.
+- Upload ingestion is now available (`/ingest`) for `.txt`, `.md`, and text-extractable `.pdf` files; OCR for image-only/scanned PDFs is not implemented yet.
 
 ## Next Security/Eval Steps
 - Keep promptfoo blocking invariants stable and extend assertion coverage.
