@@ -125,7 +125,7 @@ jobs:
         run: uv pip install --system -e "backend/.[dev]"
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: "22"
 
