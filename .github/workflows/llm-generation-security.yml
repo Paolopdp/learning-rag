@@ -82,7 +82,7 @@ jobs:
 
       - name: Upload sanitized garak summary
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: garak-llm-summary
           path: artifacts/garak-llm/garak-summary.json
