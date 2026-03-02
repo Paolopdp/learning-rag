@@ -11,7 +11,7 @@ from app.auth import UserContext
 from app.models import Chunk
 from app.rate_limit import InMemoryWindowRateLimiter, RateLimitDecision, RedisWindowRateLimiter
 from app.retrieval import RetrievalResult
-from app.schemas import LoginRequest, QueryRequest
+from app.schemas import LoginRequest, QueryRequest, RegisterRequest
 
 
 class _FakeClock:
@@ -97,6 +97,17 @@ class _FakeLoginSession:
 
     def execute(self, *_args, **_kwargs):
         return _FakeScalarResult(None)
+
+
+class _FakeRegisterExistingSession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, *_args, **_kwargs):
+        return _FakeScalarResult(object())
 
 
 def _request_with_client_ip(ip: str) -> Request:
@@ -482,6 +493,30 @@ def test_build_auth_login_rate_limiter_falls_back_when_redis_init_fails(monkeypa
     assert payload["extra"]["error_type"] == "RuntimeError"
 
 
+def test_build_auth_register_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    def _boom(**_kwargs):
+        raise RuntimeError("redis client init failed")
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+
+    limiter = rate_limit_module.build_auth_register_rate_limiter()
+
+    assert isinstance(limiter, InMemoryWindowRateLimiter)
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "auth_register_rate_limit_redis_init_failed_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+
+
 def test_build_ingest_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
     warnings = []
 
@@ -504,6 +539,83 @@ def test_build_ingest_rate_limiter_falls_back_when_redis_init_fails(monkeypatch)
     assert message == "ingest_rate_limit_redis_init_failed_fallback_memory"
     assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
     assert payload["extra"]["error_type"] == "RuntimeError"
+
+
+def test_auth_register_rate_limit_short_circuits_before_db_lookup(monkeypatch) -> None:
+    class _AlwaysDenyLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=False,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=0,
+                retry_after_seconds=22,
+            )
+
+    logger = _CapturingLogger()
+
+    def _fail_session_local():
+        raise AssertionError(
+            "SessionLocal should not be called when auth register is rate-limited"
+        )
+
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "auth_register_rate_limiter", _AlwaysDenyLimiter())
+    monkeypatch.setattr(app_main, "logger", logger)
+    monkeypatch.setattr(app_main, "SessionLocal", _fail_session_local)
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.register(
+            RegisterRequest(email="demo@local", password="secret-pass"),
+            _request_with_client_ip("127.0.0.1"),
+        )
+
+    error = exc_info.value
+    assert error.status_code == 429
+    assert error.detail == "Too many registration attempts. Please retry later."
+    assert error.headers is not None
+    assert int(error.headers["Retry-After"]) > 0
+    assert len(logger.warning_calls) == 1
+    message, payload = logger.warning_calls[0]
+    assert message == "auth_register_rate_limit_denied"
+    assert payload["extra"]["rate_limit_scope"] == "ip"
+    assert payload["extra"]["client_ip"] == "127.0.0.1"
+
+
+def test_auth_register_rate_limit_logs_near_exhaustion(monkeypatch) -> None:
+    class _NearExhaustionLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=1,
+                retry_after_seconds=0,
+            )
+
+    logger = _CapturingLogger()
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "auth_register_rate_limiter", _NearExhaustionLimiter())
+    monkeypatch.setattr(app_main, "logger", logger)
+    monkeypatch.setattr(app_main, "SessionLocal", lambda: _FakeRegisterExistingSession())
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.register(
+            RegisterRequest(email="demo@local", password="secret-pass"),
+            _request_with_client_ip("127.0.0.1"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert len(logger.info_calls) == 2
+    assert logger.info_calls[0][0] == "auth_register_rate_limit_near_exhaustion"
+    scopes = {entry[1]["extra"]["rate_limit_scope"] for entry in logger.info_calls}
+    assert scopes == {"ip", "subject"}
 
 
 def test_auth_login_rate_limit_short_circuits_before_db_lookup(monkeypatch) -> None:

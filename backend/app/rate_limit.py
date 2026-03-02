@@ -22,6 +22,10 @@ def auth_login_rate_limit_enabled() -> bool:
     return os.getenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
 
 
+def auth_register_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
 def ingest_rate_limit_enabled() -> bool:
     return os.getenv("RAG_INGEST_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
 
@@ -73,6 +77,14 @@ def auth_login_rate_limit_requests() -> int:
 
 def auth_login_rate_limit_window_seconds() -> int:
     return _positive_int_env("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def auth_register_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS", 5)
+
+
+def auth_register_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS", 60)
 
 
 def ingest_rate_limit_requests() -> int:
@@ -373,6 +385,13 @@ def build_auth_login_rate_limiter():
     return _build_rate_limiter(
         key_namespace="auth_login",
         event_prefix="auth_login_rate_limit",
+    )
+
+
+def build_auth_register_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="auth_register",
+        event_prefix="auth_register_rate_limit",
     )
 
 

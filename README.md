@@ -157,6 +157,7 @@ PII redaction is applied both at ingestion-time (stored document text) and respo
 Query endpoint now enforces per-workspace rate limiting and returns `429` with `Retry-After` when limits are exceeded.
 Rate-limit counters are stored in Redis (Valkey compatible) by default, with automatic in-memory fallback if Redis is unavailable.
 Login endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when login attempts exceed configured limits.
+Register endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when registration attempts exceed configured limits.
 Upload ingest endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when request budgets are exceeded.
 Governance reference: `docs/governance.md`.
 Operations reference: `docs/operations.md`.
@@ -231,6 +232,9 @@ Environment variables:
 - `RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED=0` to disable login throttling in local/debug flows
 - `RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS` to configure max login attempts per key in window (default `10`)
 - `RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` to configure login throttle window size (default `60`)
+- `RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED=0` to disable register throttling in local/debug flows
+- `RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS` to configure max registration attempts per key in window (default `5`)
+- `RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS` to configure register throttle window size (default `60`)
 - `RAG_INGEST_RATE_LIMIT_ENABLED=0` to disable upload-ingest throttling in local/debug flows
 - `RAG_INGEST_RATE_LIMIT_REQUESTS` to configure default max ingest requests per key in window (default `8`)
 - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE` optional workspace-scope max ingest requests in window (defaults to `RAG_INGEST_RATE_LIMIT_REQUESTS`)

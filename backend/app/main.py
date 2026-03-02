@@ -32,7 +32,11 @@ from app.rate_limit import (
     auth_login_rate_limit_enabled,
     auth_login_rate_limit_requests,
     auth_login_rate_limit_window_seconds,
+    auth_register_rate_limit_enabled,
+    auth_register_rate_limit_requests,
+    auth_register_rate_limit_window_seconds,
     build_auth_login_rate_limiter,
+    build_auth_register_rate_limiter,
     build_ingest_rate_limiter,
     build_query_rate_limiter,
     ingest_rate_limit_enabled,
@@ -67,6 +71,7 @@ logger = logging.getLogger(__name__)
 chunk_store = get_chunk_store()
 query_rate_limiter = build_query_rate_limiter()
 auth_login_rate_limiter = build_auth_login_rate_limiter()
+auth_register_rate_limiter = build_auth_register_rate_limiter()
 ingest_rate_limiter = build_ingest_rate_limiter()
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
 RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING = 3
@@ -228,8 +233,60 @@ async def read_upload_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
 
 
 @app.post("/auth/register", response_model=AuthResponse)
-def register(payload: RegisterRequest) -> AuthResponse:
+def register(payload: RegisterRequest, request: Request) -> AuthResponse:
     email = normalized_email(payload.email)
+    client_ip = request_client_ip(request)
+    register_fingerprint = login_subject_hash(email)
+    register_rate_limit_enabled = auth_register_rate_limit_enabled()
+    register_rate_limit_requests = auth_register_rate_limit_requests()
+    register_rate_limit_window = auth_register_rate_limit_window_seconds()
+    if register_rate_limit_enabled:
+        rate_limit_keys = (
+            ("ip", f"ip:{client_ip}"),
+            ("subject", f"subject:{register_fingerprint}"),
+        )
+        for limit_scope, rate_limit_key in rate_limit_keys:
+            decision = auth_register_rate_limiter.check(
+                key=rate_limit_key,
+                limit=register_rate_limit_requests,
+                window_seconds=register_rate_limit_window,
+            )
+            if not decision.allowed:
+                logger.warning(
+                    "auth_register_rate_limit_denied",
+                    extra={
+                        "client_ip": client_ip,
+                        "subject_hash": register_fingerprint,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_retry_after_seconds": decision.retry_after_seconds,
+                    },
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many registration attempts. Please retry later.",
+                    headers={"Retry-After": str(decision.retry_after_seconds)},
+                )
+
+            if should_log_rate_limit_near_exhaustion(
+                remaining=decision.remaining,
+                limit=decision.limit,
+            ):
+                logger.info(
+                    "auth_register_rate_limit_near_exhaustion",
+                    extra={
+                        "client_ip": client_ip,
+                        "subject_hash": register_fingerprint,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_remaining": decision.remaining,
+                    },
+                )
+
     with SessionLocal() as session:
         existing = session.execute(
             select(UserORM).where(func.lower(UserORM.email) == email)

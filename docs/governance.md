@@ -63,6 +63,9 @@ This project includes a minimal governance baseline focused on traceability and 
 - Login throttling emits structured observability logs:
   - `auth_login_rate_limit_near_exhaustion` when remaining budget is low.
   - `auth_login_rate_limit_denied` on enforced `429` responses.
+- Register throttling emits structured observability logs:
+  - `auth_register_rate_limit_near_exhaustion` when remaining budget is low.
+  - `auth_register_rate_limit_denied` on enforced `429` responses.
 - Upload-ingest throttling emits structured observability logs:
   - `ingest_rate_limit_near_exhaustion` when remaining budget is low.
   - `ingest_rate_limit_denied` on enforced `429` responses.
@@ -75,6 +78,17 @@ This project includes a minimal governance baseline focused on traceability and 
 - Keying strategy:
   - Client IP scope
   - Login subject hash scope (normalized email hash)
+- Response behavior:
+  - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
+
+## Auth Register Abuse Control
+- Endpoint: `POST /auth/register`
+- Default limits:
+  - `RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS=5`
+  - `RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS=60`
+- Keying strategy:
+  - Client IP scope
+  - Registration subject hash scope (normalized email hash)
 - Response behavior:
   - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
 
