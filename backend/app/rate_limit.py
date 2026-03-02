@@ -22,6 +22,10 @@ def auth_login_rate_limit_enabled() -> bool:
     return os.getenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
 
 
+def ingest_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_INGEST_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
 def redis_url() -> str:
     return os.getenv("RAG_REDIS_URL", "redis://localhost:6379/0")
 
@@ -69,6 +73,29 @@ def auth_login_rate_limit_requests() -> int:
 
 def auth_login_rate_limit_window_seconds() -> int:
     return _positive_int_env("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def ingest_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_INGEST_RATE_LIMIT_REQUESTS", 8)
+
+
+def ingest_rate_limit_requests_for_scope(scope: str) -> int:
+    normalized = (scope or "").strip().lower()
+    if normalized == "workspace":
+        return _positive_int_env(
+            "RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE",
+            ingest_rate_limit_requests(),
+        )
+    if normalized == "user":
+        return _positive_int_env(
+            "RAG_INGEST_RATE_LIMIT_REQUESTS_USER",
+            ingest_rate_limit_requests(),
+        )
+    return ingest_rate_limit_requests()
+
+
+def ingest_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS", 60)
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -346,4 +373,11 @@ def build_auth_login_rate_limiter():
     return _build_rate_limiter(
         key_namespace="auth_login",
         event_prefix="auth_login_rate_limit",
+    )
+
+
+def build_ingest_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="ingest",
+        event_prefix="ingest_rate_limit",
     )

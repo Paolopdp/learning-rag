@@ -33,7 +33,11 @@ from app.rate_limit import (
     auth_login_rate_limit_requests,
     auth_login_rate_limit_window_seconds,
     build_auth_login_rate_limiter,
+    build_ingest_rate_limiter,
     build_query_rate_limiter,
+    ingest_rate_limit_enabled,
+    ingest_rate_limit_requests_for_scope,
+    ingest_rate_limit_window_seconds,
     query_rate_limit_enabled,
     query_rate_limit_requests_for_role,
     query_rate_limit_window_seconds,
@@ -63,6 +67,7 @@ logger = logging.getLogger(__name__)
 chunk_store = get_chunk_store()
 query_rate_limiter = build_query_rate_limiter()
 auth_login_rate_limiter = build_auth_login_rate_limiter()
+ingest_rate_limiter = build_ingest_rate_limiter()
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
 RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING = 3
 RATE_LIMIT_NEAR_EXHAUSTION_RATIO = 0.2
@@ -705,6 +710,72 @@ async def ingest_upload(
     current_user: UserContext = Depends(get_current_user),
 ) -> IngestResponse:
     workspace_uuid = require_workspace_uuid(workspace_id)
+    ingest_limit_enabled = ingest_rate_limit_enabled()
+    ingest_limit_window_seconds = ingest_rate_limit_window_seconds()
+    ingest_limit_workspace_requests = ingest_rate_limit_requests_for_scope("workspace")
+    ingest_limit_user_requests = ingest_rate_limit_requests_for_scope("user")
+    if ingest_limit_enabled:
+        rate_limit_checks = (
+            ("workspace", f"workspace:{workspace_id}", ingest_limit_workspace_requests),
+            ("user", f"user:{current_user.id}", ingest_limit_user_requests),
+        )
+        for limit_scope, limit_key, limit_requests in rate_limit_checks:
+            decision = ingest_rate_limiter.check(
+                key=limit_key,
+                limit=limit_requests,
+                window_seconds=ingest_limit_window_seconds,
+            )
+            if not decision.allowed:
+                logger.warning(
+                    "ingest_rate_limit_denied",
+                    extra={
+                        "workspace_id": workspace_id,
+                        "user_id": current_user.id,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_retry_after_seconds": decision.retry_after_seconds,
+                    },
+                )
+                log_event(
+                    workspace_id=workspace_id,
+                    user_id=None if auth_disabled() else current_user.id,
+                    action="ingest_upload",
+                    payload={
+                        "outcome": "failure",
+                        "reason": "rate_limited",
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_retry_after_seconds": decision.retry_after_seconds,
+                        "rate_limit_remaining": 0,
+                        "replace_existing": replace_existing,
+                    },
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many ingest requests. Please retry later.",
+                    headers={"Retry-After": str(decision.retry_after_seconds)},
+                )
+            if should_log_rate_limit_near_exhaustion(
+                remaining=decision.remaining,
+                limit=decision.limit,
+            ):
+                logger.info(
+                    "ingest_rate_limit_near_exhaustion",
+                    extra={
+                        "workspace_id": workspace_id,
+                        "user_id": current_user.id,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_remaining": decision.remaining,
+                    },
+                )
+
     require_workspace_role(workspace_id, current_user)
     require_workspace_exists_for_postgres(workspace_uuid)
     max_files = ingest_max_files()

@@ -63,6 +63,9 @@ This project includes a minimal governance baseline focused on traceability and 
 - Login throttling emits structured observability logs:
   - `auth_login_rate_limit_near_exhaustion` when remaining budget is low.
   - `auth_login_rate_limit_denied` on enforced `429` responses.
+- Upload-ingest throttling emits structured observability logs:
+  - `ingest_rate_limit_near_exhaustion` when remaining budget is low.
+  - `ingest_rate_limit_denied` on enforced `429` responses.
 
 ## Auth Abuse Control
 - Endpoint: `POST /auth/login`
@@ -72,6 +75,20 @@ This project includes a minimal governance baseline focused on traceability and 
 - Keying strategy:
   - Client IP scope
   - Login subject hash scope (normalized email hash)
+- Response behavior:
+  - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
+
+## Upload Ingest Abuse Control
+- Endpoint: `POST /workspaces/{workspace_id}/ingest`
+- Default limits:
+  - `RAG_INGEST_RATE_LIMIT_REQUESTS=8`
+  - `RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS=60`
+- Scope-specific overrides:
+  - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE`
+  - `RAG_INGEST_RATE_LIMIT_REQUESTS_USER`
+- Keying strategy:
+  - Workspace scope key (`workspace:{workspace_id}`)
+  - User scope key (`user:{user_id}`)
 - Response behavior:
   - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
 

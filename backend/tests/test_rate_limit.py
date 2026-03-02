@@ -250,6 +250,16 @@ def test_query_rate_limit_uses_role_specific_limit(monkeypatch) -> None:
     assert admin_response.policy.rate_limit_remaining == 4
 
 
+def test_ingest_rate_limit_uses_scope_specific_limits(monkeypatch) -> None:
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS", "8")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE", "4")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_USER", "3")
+
+    assert rate_limit_module.ingest_rate_limit_requests_for_scope("workspace") == 4
+    assert rate_limit_module.ingest_rate_limit_requests_for_scope("user") == 3
+    assert rate_limit_module.ingest_rate_limit_requests_for_scope("other") == 8
+
+
 def test_query_rate_limit_logs_near_exhaustion(monkeypatch) -> None:
     store = _SingleResultStore()
     clock = _FakeClock()
@@ -468,6 +478,30 @@ def test_build_auth_login_rate_limiter_falls_back_when_redis_init_fails(monkeypa
     assert len(warnings) == 1
     message, payload = warnings[0]
     assert message == "auth_login_rate_limit_redis_init_failed_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+
+
+def test_build_ingest_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    def _boom(**_kwargs):
+        raise RuntimeError("redis client init failed")
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+
+    limiter = rate_limit_module.build_ingest_rate_limiter()
+
+    assert isinstance(limiter, InMemoryWindowRateLimiter)
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "ingest_rate_limit_redis_init_failed_fallback_memory"
     assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
     assert payload["extra"]["error_type"] == "RuntimeError"
 
