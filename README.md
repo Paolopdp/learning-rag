@@ -156,7 +156,9 @@ Invalid workspace IDs return `400` before any processing.
 PII redaction is applied both at ingestion-time (stored document text) and response-time (query answer/excerpts) for baseline identifiers (`email`, `IBAN`, Italian tax code, credit card).
 Query endpoint now enforces per-workspace rate limiting and returns `429` with `Retry-After` when limits are exceeded.
 Rate-limit counters are stored in Redis (Valkey compatible) by default, with automatic in-memory fallback if Redis is unavailable.
+Login endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when login attempts exceed configured limits.
 Governance reference: `docs/governance.md`.
+Operations reference: `docs/operations.md`.
 Threat model reference: `docs/threat-model.md`.
 
 ## Frontend (Minimal UI)
@@ -208,6 +210,9 @@ docker compose --profile observability up -d jaeger
 
 Then open the UI at `http://localhost:16686`.
 
+Rate-limit observability queries and alert examples:
+- `docs/operations.md`
+
 ## Auth Configuration
 Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)
@@ -219,8 +224,13 @@ Environment variables:
 - `RAG_PII_DEBUG=1` to include Presidio fallback stack traces in logs during troubleshooting
 - `RAG_QUERY_RATE_LIMIT_ENABLED=0` to disable query throttling in local/debug flows
 - `RAG_QUERY_RATE_LIMIT_REQUESTS` to configure max queries per workspace in window (default `20`)
+- `RAG_QUERY_RATE_LIMIT_REQUESTS_MEMBER` optional member-specific max queries per workspace in window (defaults to `RAG_QUERY_RATE_LIMIT_REQUESTS`)
+- `RAG_QUERY_RATE_LIMIT_REQUESTS_ADMIN` optional admin-specific max queries per workspace in window (defaults to `RAG_QUERY_RATE_LIMIT_REQUESTS`)
 - `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
-- `RAG_REDIS_URL` to configure Redis/Valkey endpoint for query throttling (default `redis://localhost:6379/0`)
+- `RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED=0` to disable login throttling in local/debug flows
+- `RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS` to configure max login attempts per key in window (default `10`)
+- `RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` to configure login throttle window size (default `60`)
+- `RAG_REDIS_URL` to configure Redis/Valkey endpoint for throttling counters (default `redis://localhost:6379/0`)
 - `RAG_INGEST_MAX_FILES` max files accepted per upload ingest request (default `10`)
 - `RAG_INGEST_MAX_FILE_BYTES` max bytes per uploaded file (default `5242880`)
 - `RAG_INGEST_MAX_PDF_PAGES` max parsed pages per uploaded PDF (default `40`)

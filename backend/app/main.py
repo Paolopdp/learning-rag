@@ -1,7 +1,8 @@
 import logging
+import hashlib
 import uuid
 
-from fastapi import Depends, FastAPI, File, HTTPException, Response, UploadFile, status
+from fastapi import Depends, FastAPI, File, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import func, select
 
@@ -28,9 +29,13 @@ from app.llm import generate_answer, llm_enabled
 from app.observability import configure_otel
 from app.pii import merge_redaction_counts, pii_backend, pii_redaction_enabled, redact_text
 from app.rate_limit import (
+    auth_login_rate_limit_enabled,
+    auth_login_rate_limit_requests,
+    auth_login_rate_limit_window_seconds,
+    build_auth_login_rate_limiter,
     build_query_rate_limiter,
     query_rate_limit_enabled,
-    query_rate_limit_requests,
+    query_rate_limit_requests_for_role,
     query_rate_limit_window_seconds,
 )
 from app.schemas import (
@@ -57,7 +62,10 @@ logger = logging.getLogger(__name__)
 
 chunk_store = get_chunk_store()
 query_rate_limiter = build_query_rate_limiter()
+auth_login_rate_limiter = build_auth_login_rate_limiter()
 UPLOAD_READ_CHUNK_SIZE = 64 * 1024
+RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING = 3
+RATE_LIMIT_NEAR_EXHAUSTION_RATIO = 0.2
 
 DEFAULT_DOCUMENTS_LIMIT = 50
 MAX_DOCUMENTS_LIMIT = 200
@@ -171,6 +179,35 @@ def allowed_labels_for_role(role: str) -> set[str]:
     return {CLASSIFICATION_PUBLIC}
 
 
+def should_log_rate_limit_near_exhaustion(*, remaining: int, limit: int) -> bool:
+    threshold = max(
+        1,
+        min(
+            RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING,
+            int(limit * RATE_LIMIT_NEAR_EXHAUSTION_RATIO),
+        ),
+    )
+    return remaining <= threshold
+
+
+def normalized_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def login_subject_hash(email: str) -> str:
+    digest = hashlib.blake2b(
+        normalized_email(email).encode("utf-8"),
+        digest_size=12,
+    )
+    return digest.hexdigest()
+
+
+def request_client_ip(request: Request) -> str:
+    if request.client is None or not request.client.host:
+        return "unknown"
+    return request.client.host
+
+
 async def read_upload_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
     content = bytearray()
     while True:
@@ -187,15 +224,16 @@ async def read_upload_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
 
 @app.post("/auth/register", response_model=AuthResponse)
 def register(payload: RegisterRequest) -> AuthResponse:
+    email = normalized_email(payload.email)
     with SessionLocal() as session:
         existing = session.execute(
-            select(UserORM).where(UserORM.email == payload.email)
+            select(UserORM).where(func.lower(UserORM.email) == email)
         ).scalar_one_or_none()
         if existing:
             raise HTTPException(status_code=400, detail="Email already registered.")
 
         user = UserORM(
-            email=payload.email,
+            email=email,
             hashed_password=hash_password(payload.password),
         )
         workspace = WorkspaceORM(name="Default Workspace")
@@ -211,7 +249,7 @@ def register(payload: RegisterRequest) -> AuthResponse:
         session.commit()
 
         if audit_enabled():
-            domain = payload.email.split("@")[-1] if "@" in payload.email else "unknown"
+            domain = email.split("@")[-1] if "@" in email else "unknown"
             log_event(
                 workspace_id=str(workspace.id),
                 user_id=str(user.id),
@@ -235,10 +273,64 @@ def register(payload: RegisterRequest) -> AuthResponse:
 
 
 @app.post("/auth/login", response_model=AuthResponse)
-def login(payload: LoginRequest) -> AuthResponse:
+def login(payload: LoginRequest, request: Request) -> AuthResponse:
+    email = normalized_email(payload.email)
+    client_ip = request_client_ip(request)
+    login_fingerprint = login_subject_hash(email)
+
+    auth_rate_limit_enabled = auth_login_rate_limit_enabled()
+    auth_rate_limit_requests = auth_login_rate_limit_requests()
+    auth_rate_limit_window = auth_login_rate_limit_window_seconds()
+    if auth_rate_limit_enabled:
+        rate_limit_keys = (
+            ("ip", f"ip:{client_ip}"),
+            ("subject", f"subject:{login_fingerprint}"),
+        )
+        for limit_scope, rate_limit_key in rate_limit_keys:
+            decision = auth_login_rate_limiter.check(
+                key=rate_limit_key,
+                limit=auth_rate_limit_requests,
+                window_seconds=auth_rate_limit_window,
+            )
+            if not decision.allowed:
+                logger.warning(
+                    "auth_login_rate_limit_denied",
+                    extra={
+                        "client_ip": client_ip,
+                        "subject_hash": login_fingerprint,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_retry_after_seconds": decision.retry_after_seconds,
+                    },
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many login attempts. Please retry later.",
+                    headers={"Retry-After": str(decision.retry_after_seconds)},
+                )
+
+            if should_log_rate_limit_near_exhaustion(
+                remaining=decision.remaining,
+                limit=decision.limit,
+            ):
+                logger.info(
+                    "auth_login_rate_limit_near_exhaustion",
+                    extra={
+                        "client_ip": client_ip,
+                        "subject_hash": login_fingerprint,
+                        "rate_limit_scope": limit_scope,
+                        "rate_limit_backend": decision.backend,
+                        "rate_limit_requests": decision.limit,
+                        "rate_limit_window_seconds": decision.window_seconds,
+                        "rate_limit_remaining": decision.remaining,
+                    },
+                )
+
     with SessionLocal() as session:
         user = session.execute(
-            select(UserORM).where(UserORM.email == payload.email)
+            select(UserORM).where(func.lower(UserORM.email) == email)
         ).scalar_one_or_none()
         if not user or not verify_password(payload.password, user.hashed_password):
             raise HTTPException(status_code=401, detail="Invalid credentials.")
@@ -756,7 +848,7 @@ def query(
     pii_enabled = pii_redaction_enabled()
     configured_pii_backend = pii_backend()
     rate_limit_enabled = query_rate_limit_enabled()
-    rate_limit_requests = query_rate_limit_requests()
+    rate_limit_requests = query_rate_limit_requests_for_role(role)
     rate_limit_window_seconds = query_rate_limit_window_seconds()
     rate_limit_remaining: int | None = None
     rate_limit_backend: str | None = None
@@ -768,6 +860,17 @@ def query(
         )
         rate_limit_backend = rate_limit.backend
         if not rate_limit.allowed:
+            logger.warning(
+                "query_rate_limit_denied",
+                extra={
+                    "workspace_id": workspace_id,
+                    "access_role": role,
+                    "rate_limit_backend": rate_limit.backend,
+                    "rate_limit_requests": rate_limit.limit,
+                    "rate_limit_window_seconds": rate_limit.window_seconds,
+                    "rate_limit_retry_after_seconds": rate_limit.retry_after_seconds,
+                },
+            )
             log_event(
                 workspace_id=workspace_id,
                 user_id=None if auth_disabled() else current_user.id,
@@ -790,6 +893,21 @@ def query(
                 headers={"Retry-After": str(rate_limit.retry_after_seconds)},
             )
         rate_limit_remaining = rate_limit.remaining
+        if should_log_rate_limit_near_exhaustion(
+            remaining=rate_limit.remaining,
+            limit=rate_limit.limit,
+        ):
+            logger.info(
+                "query_rate_limit_near_exhaustion",
+                extra={
+                    "workspace_id": workspace_id,
+                    "access_role": role,
+                    "rate_limit_backend": rate_limit.backend,
+                    "rate_limit_requests": rate_limit.limit,
+                    "rate_limit_window_seconds": rate_limit.window_seconds,
+                    "rate_limit_remaining": rate_limit.remaining,
+                },
+            )
 
     if not chunk_store.has_workspace_data(workspace_id):
         raise HTTPException(status_code=400, detail="No data ingested yet.")

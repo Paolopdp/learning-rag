@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app import main as app_main
 from app import rate_limit as rate_limit_module
@@ -10,7 +11,7 @@ from app.auth import UserContext
 from app.models import Chunk
 from app.rate_limit import InMemoryWindowRateLimiter, RateLimitDecision, RedisWindowRateLimiter
 from app.retrieval import RetrievalResult
-from app.schemas import QueryRequest
+from app.schemas import LoginRequest, QueryRequest
 
 
 class _FakeClock:
@@ -65,6 +66,49 @@ class _FakeRedisClient:
             return self._counts[key]
 
         return _run
+
+
+class _CapturingLogger:
+    def __init__(self) -> None:
+        self.info_calls: list[tuple[str, dict]] = []
+        self.warning_calls: list[tuple[str, dict]] = []
+
+    def info(self, message: str, **kwargs) -> None:
+        self.info_calls.append((message, kwargs))
+
+    def warning(self, message: str, **kwargs) -> None:
+        self.warning_calls.append((message, kwargs))
+
+
+class _FakeScalarResult:
+    def __init__(self, value) -> None:
+        self._value = value
+
+    def scalar_one_or_none(self):
+        return self._value
+
+
+class _FakeLoginSession:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def execute(self, *_args, **_kwargs):
+        return _FakeScalarResult(None)
+
+
+def _request_with_client_ip(ip: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/login",
+            "headers": [],
+            "client": (ip, 54321),
+        }
+    )
 
 
 def test_inmemory_rate_limiter_prunes_inactive_keys_on_cleanup() -> None:
@@ -172,6 +216,103 @@ def test_query_rate_limit_blocks_and_recovers_after_window(monkeypatch) -> None:
     assert third.answer == "workspace=11111111-1111-1111-1111-111111111111"
 
 
+def test_query_rate_limit_uses_role_specific_limit(monkeypatch) -> None:
+    events = []
+    store = _SingleResultStore()
+    clock = _FakeClock()
+
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "20")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS_MEMBER", "2")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS_ADMIN", "5")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "query_rate_limiter", InMemoryWindowRateLimiter(now_fn=clock.now))
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: events.append(kwargs))
+
+    request = QueryRequest(question="test", top_k=1)
+    workspace_member = "11111111-1111-1111-1111-111111111111"
+    workspace_admin = "22222222-2222-2222-2222-222222222222"
+
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    member_user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    member_response = app_main.query(workspace_member, request, member_user)
+    assert member_response.policy.rate_limit_requests == 2
+    assert member_response.policy.rate_limit_remaining == 1
+
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "admin")
+    admin_user = UserContext(id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", email="admin@local")
+    admin_response = app_main.query(workspace_admin, request, admin_user)
+    assert admin_response.policy.rate_limit_requests == 5
+    assert admin_response.policy.rate_limit_remaining == 4
+
+
+def test_query_rate_limit_logs_near_exhaustion(monkeypatch) -> None:
+    store = _SingleResultStore()
+    clock = _FakeClock()
+    logger = _CapturingLogger()
+
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "query_rate_limiter", InMemoryWindowRateLimiter(now_fn=clock.now))
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: None)
+    monkeypatch.setattr(app_main, "logger", logger)
+
+    user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    request = QueryRequest(question="test", top_k=1)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    app_main.query(workspace_id, request, user)
+
+    assert len(logger.info_calls) == 1
+    message, payload = logger.info_calls[0]
+    assert message == "query_rate_limit_near_exhaustion"
+    assert payload["extra"]["workspace_id"] == workspace_id
+    assert payload["extra"]["rate_limit_remaining"] == 1
+
+
+def test_query_rate_limit_logs_denial_warning(monkeypatch) -> None:
+    store = _SingleResultStore()
+    clock = _FakeClock()
+    logger = _CapturingLogger()
+
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setenv("RAG_PII_REDACTION_ENABLED", "0")
+    monkeypatch.setattr(app_main, "chunk_store", store)
+    monkeypatch.setattr(app_main, "query_rate_limiter", InMemoryWindowRateLimiter(now_fn=clock.now))
+    monkeypatch.setattr(app_main, "embed_text", lambda _: np.array([1.0, 0.0]))
+    monkeypatch.setattr(app_main, "llm_enabled", lambda: False)
+    monkeypatch.setattr(app_main, "require_workspace_role", lambda *_args, **_kwargs: "member")
+    monkeypatch.setattr(app_main, "log_event", lambda **kwargs: None)
+    monkeypatch.setattr(app_main, "logger", logger)
+
+    user = UserContext(id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", email="member@local")
+    request = QueryRequest(question="test", top_k=1)
+    workspace_id = "11111111-1111-1111-1111-111111111111"
+
+    app_main.query(workspace_id, request, user)
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.query(workspace_id, request, user)
+
+    assert exc_info.value.status_code == 429
+    assert len(logger.warning_calls) == 1
+    message, payload = logger.warning_calls[0]
+    assert message == "query_rate_limit_denied"
+    assert payload["extra"]["workspace_id"] == workspace_id
+    assert payload["extra"]["access_role"] == "member"
+
+
 def test_redis_window_rate_limiter_counts_per_window() -> None:
     clock = _FakeClock()
     limiter = RedisWindowRateLimiter(
@@ -271,7 +412,11 @@ def test_build_query_rate_limiter_returns_resilient_wrapper(monkeypatch) -> None
                 retry_after_seconds=0,
             )
 
-    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", lambda: _FakeRedisLimiter())
+    monkeypatch.setattr(
+        rate_limit_module,
+        "RedisWindowRateLimiter",
+        lambda **_kwargs: _FakeRedisLimiter(),
+    )
     limiter = rate_limit_module.build_query_rate_limiter()
 
     decision = limiter.check(key="workspace-1", limit=3, window_seconds=60)
@@ -286,7 +431,7 @@ def test_build_query_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) 
         def warning(self, message: str, **kwargs) -> None:
             warnings.append((message, kwargs))
 
-    def _boom():
+    def _boom(**_kwargs):
         raise RuntimeError("redis client init failed")
 
     monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
@@ -301,6 +446,107 @@ def test_build_query_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) 
     assert message == "query_rate_limit_redis_init_failed_fallback_memory"
     assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
     assert payload["extra"]["error_type"] == "RuntimeError"
+
+
+def test_build_auth_login_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    def _boom(**_kwargs):
+        raise RuntimeError("redis client init failed")
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+
+    limiter = rate_limit_module.build_auth_login_rate_limiter()
+
+    assert isinstance(limiter, InMemoryWindowRateLimiter)
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "auth_login_rate_limit_redis_init_failed_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+
+
+def test_auth_login_rate_limit_short_circuits_before_db_lookup(monkeypatch) -> None:
+    class _AlwaysDenyLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=False,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=0,
+                retry_after_seconds=20,
+            )
+
+    logger = _CapturingLogger()
+
+    def _fail_session_local():
+        raise AssertionError(
+            "SessionLocal should not be called when auth login is rate-limited"
+        )
+
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS", "1")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "auth_login_rate_limiter", _AlwaysDenyLimiter())
+    monkeypatch.setattr(app_main, "logger", logger)
+    monkeypatch.setattr(app_main, "SessionLocal", _fail_session_local)
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.login(
+            LoginRequest(email="demo@local", password="wrong-pass"),
+            _request_with_client_ip("127.0.0.1"),
+        )
+
+    error = exc_info.value
+    assert error.status_code == 429
+    assert error.detail == "Too many login attempts. Please retry later."
+    assert error.headers is not None
+    assert int(error.headers["Retry-After"]) > 0
+    assert len(logger.warning_calls) == 1
+    message, payload = logger.warning_calls[0]
+    assert message == "auth_login_rate_limit_denied"
+    assert payload["extra"]["rate_limit_scope"] == "ip"
+    assert payload["extra"]["client_ip"] == "127.0.0.1"
+
+
+def test_auth_login_rate_limit_logs_near_exhaustion(monkeypatch) -> None:
+    class _NearExhaustionLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=1,
+                retry_after_seconds=0,
+            )
+
+    logger = _CapturingLogger()
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "auth_login_rate_limiter", _NearExhaustionLimiter())
+    monkeypatch.setattr(app_main, "logger", logger)
+    monkeypatch.setattr(app_main, "SessionLocal", lambda: _FakeLoginSession())
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.login(
+            LoginRequest(email="demo@local", password="wrong-pass"),
+            _request_with_client_ip("127.0.0.1"),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert len(logger.info_calls) == 2
+    assert logger.info_calls[0][0] == "auth_login_rate_limit_near_exhaustion"
+    scopes = {entry[1]["extra"]["rate_limit_scope"] for entry in logger.info_calls}
+    assert scopes == {"ip", "subject"}
 
 
 def test_redis_target_redacts_credentials(monkeypatch) -> None:

@@ -9,6 +9,7 @@ os.environ.setdefault("RAG_USE_LLM", "0")
 os.environ.setdefault("RAG_AUTH_DISABLED", "1")
 os.environ.setdefault("RAG_OTEL_ENABLED", "0")
 os.environ.setdefault("RAG_QUERY_RATE_LIMIT_ENABLED", "0")
+os.environ.setdefault("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "0")
 
 
 @pytest.fixture(autouse=True)
@@ -19,3 +20,4 @@ def _default_test_env(monkeypatch) -> None:
     monkeypatch.setenv("RAG_AUTH_DISABLED", "1")
     monkeypatch.setenv("RAG_OTEL_ENABLED", "0")
     monkeypatch.setenv("RAG_QUERY_RATE_LIMIT_ENABLED", "0")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "0")
