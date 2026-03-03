@@ -159,6 +159,7 @@ Rate-limit counters are stored in Redis (Valkey compatible) by default, with aut
 Login endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when login attempts exceed configured limits.
 Register endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when registration attempts exceed configured limits.
 Upload ingest endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when request budgets are exceeded.
+Protected endpoints also throttle repeated auth-token failures (missing/invalid bearer) and can return `429` with `Retry-After`.
 Governance reference: `docs/governance.md`.
 Operations reference: `docs/operations.md`.
 Threat model reference: `docs/threat-model.md`.
@@ -220,6 +221,7 @@ Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)
 - `RAG_AUTH_DISABLED=1` to bypass auth (tests/dev only)
 - `RAG_CORS_ORIGINS` to override allowed origins (comma-separated)
+- `RAG_TRUSTED_PROXIES` comma-separated trusted proxy IPs/CIDRs for forwarded-header IP resolution (default empty: no forwarded-header trust)
 - `RAG_PII_REDACTION_ENABLED=0` to disable response redaction in local/debug flows
 - `RAG_PII_INGEST_REDACTION_ENABLED=0` to disable ingestion-time redaction in local/debug flows
 - `RAG_PII_BACKEND=presidio` to use Presidio recognizers when optional dependencies are installed (`regex` is default/fallback)
@@ -235,6 +237,9 @@ Environment variables:
 - `RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED=0` to disable register throttling in local/debug flows
 - `RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS` to configure max registration attempts per key in window (default `5`)
 - `RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS` to configure register throttle window size (default `60`)
+- `RAG_AUTH_TOKEN_RATE_LIMIT_ENABLED=0` to disable auth-token failure throttling in local/debug flows
+- `RAG_AUTH_TOKEN_RATE_LIMIT_REQUESTS` to configure max auth-token failures per IP in window (default `30`)
+- `RAG_AUTH_TOKEN_RATE_LIMIT_WINDOW_SECONDS` to configure auth-token failure throttle window size (default `60`)
 - `RAG_INGEST_RATE_LIMIT_ENABLED=0` to disable upload-ingest throttling in local/debug flows
 - `RAG_INGEST_RATE_LIMIT_REQUESTS` to configure default max ingest requests per key in window (default `8`)
 - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE` optional workspace-scope max ingest requests in window (defaults to `RAG_INGEST_RATE_LIMIT_REQUESTS`)

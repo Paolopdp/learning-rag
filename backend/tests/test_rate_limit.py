@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import numpy as np
 import pytest
 from fastapi import HTTPException
@@ -120,6 +122,97 @@ def _request_with_client_ip(ip: str) -> Request:
             "client": (ip, 54321),
         }
     )
+
+
+def _request_without_client() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/auth/login",
+            "headers": [],
+        }
+    )
+
+
+def test_request_client_ip_returns_none_when_missing_client() -> None:
+    assert app_main.request_client_ip(_request_without_client()) is None
+
+
+def test_proxy_headers_middleware_applies_forwarded_ip_for_trusted_proxy() -> None:
+    captured_client = {}
+
+    async def downstream_app(scope, receive, send):
+        captured_client["client"] = scope.get("client")
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    middleware = app_main.ProxyHeadersMiddleware(
+        downstream_app,
+        trusted_hosts=["127.0.0.1"],
+    )
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"x-forwarded-for", b"198.51.100.7, 127.0.0.1")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    asyncio.run(middleware(scope, receive, send))
+    assert captured_client["client"] == ("198.51.100.7", 0)
+
+
+def test_proxy_headers_middleware_ignores_forwarded_ip_for_untrusted_proxy() -> None:
+    captured_client = {}
+
+    async def downstream_app(scope, receive, send):
+        captured_client["client"] = scope.get("client")
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    middleware = app_main.ProxyHeadersMiddleware(
+        downstream_app,
+        trusted_hosts=["127.0.0.1"],
+    )
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"x-forwarded-for", b"198.51.100.7, 127.0.0.1")],
+        "client": ("203.0.113.9", 12345),
+        "server": ("testserver", 80),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    asyncio.run(middleware(scope, receive, send))
+    assert captured_client["client"] == ("203.0.113.9", 12345)
 
 
 def test_inmemory_rate_limiter_prunes_inactive_keys_on_cleanup() -> None:
@@ -693,6 +786,38 @@ def test_auth_login_rate_limit_logs_near_exhaustion(monkeypatch) -> None:
     assert logger.info_calls[0][0] == "auth_login_rate_limit_near_exhaustion"
     scopes = {entry[1]["extra"]["rate_limit_scope"] for entry in logger.info_calls}
     assert scopes == {"ip", "subject"}
+
+
+def test_auth_login_rate_limit_skips_ip_scope_when_client_ip_missing(monkeypatch) -> None:
+    checked_keys: list[str] = []
+
+    class _CaptureLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            checked_keys.append(key)
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=max(0, limit - 1),
+                retry_after_seconds=0,
+            )
+
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS", "2")
+    monkeypatch.setenv("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "auth_login_rate_limiter", _CaptureLimiter())
+    monkeypatch.setattr(app_main, "SessionLocal", lambda: _FakeLoginSession())
+
+    with pytest.raises(HTTPException) as exc_info:
+        app_main.login(
+            LoginRequest(email="demo@local", password="wrong-pass"),
+            _request_without_client(),
+        )
+
+    assert exc_info.value.status_code == 401
+    assert len(checked_keys) == 1
+    assert checked_keys[0].startswith("subject:")
 
 
 def test_redis_target_redacts_credentials(monkeypatch) -> None:

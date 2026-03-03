@@ -69,6 +69,9 @@ This project includes a minimal governance baseline focused on traceability and 
 - Upload-ingest throttling emits structured observability logs:
   - `ingest_rate_limit_near_exhaustion` when remaining budget is low.
   - `ingest_rate_limit_denied` on enforced `429` responses.
+- Proxy/header trust model:
+  - Forwarded client IP headers are honored only for `RAG_TRUSTED_PROXIES`.
+  - If client IP is unavailable, auth login/register checks fall back to subject scope only.
 
 ## Auth Abuse Control
 - Endpoint: `POST /auth/login`
@@ -101,8 +104,8 @@ This project includes a minimal governance baseline focused on traceability and 
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE`
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_USER`
 - Keying strategy:
-  - Workspace scope key (`workspace:{workspace_id}`)
   - User scope key (`user:{user_id}`)
+  - Workspace scope key (`workspace:{workspace_id}`) after membership verification
 - Response behavior:
   - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
 

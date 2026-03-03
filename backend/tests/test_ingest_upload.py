@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app import main as app_main
@@ -92,13 +93,49 @@ def test_ingest_upload_rate_limit_short_circuits_before_workspace_check(monkeypa
     assert int(response.headers["Retry-After"]) > 0
     assert len(logger.warning_calls) == 1
     assert logger.warning_calls[0][0] == "ingest_rate_limit_denied"
-    assert logger.warning_calls[0][1]["extra"]["rate_limit_scope"] == "workspace"
+    assert logger.warning_calls[0][1]["extra"]["rate_limit_scope"] == "user"
 
     upload_events = [event for event in events if event["action"] == "ingest_upload"]
     assert len(upload_events) == 1
     assert upload_events[0]["payload"]["outcome"] == "failure"
     assert upload_events[0]["payload"]["reason"] == "rate_limited"
-    assert upload_events[0]["payload"]["rate_limit_scope"] == "workspace"
+    assert upload_events[0]["payload"]["rate_limit_scope"] == "user"
+
+
+def test_ingest_upload_non_member_does_not_hit_workspace_scope_rate_limit(monkeypatch) -> None:
+    checked_keys: list[str] = []
+
+    class _AllowLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            checked_keys.append(key)
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=max(0, limit - 1),
+                retry_after_seconds=0,
+            )
+
+    def _deny_membership(*_args, **_kwargs):
+        raise HTTPException(status_code=403, detail="Workspace access denied.")
+
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE", "10")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_USER", "10")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "ingest_rate_limiter", _AllowLimiter())
+    monkeypatch.setattr(app_main, "require_workspace_role", _deny_membership)
+
+    client = TestClient(app)
+    workspace_id = "15151515-1515-1515-1515-151515151515"
+    response = client.post(
+        f"/workspaces/{workspace_id}/ingest",
+        files=[("files", ("doc.txt", b"abc", "text/plain"))],
+    )
+
+    assert response.status_code == 403
+    assert checked_keys == ["user:00000000-0000-0000-0000-000000000000"]
 
 
 def test_ingest_upload_rate_limit_logs_near_exhaustion(monkeypatch) -> None:

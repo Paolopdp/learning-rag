@@ -61,6 +61,11 @@ def cors_origins() -> list[str]:
     ]
 
 
+def trusted_proxy_hosts() -> list[str]:
+    raw = os.getenv("RAG_TRUSTED_PROXIES", "")
+    return [host.strip() for host in raw.split(",") if host.strip()]
+
+
 def auth_disabled() -> bool:
     return os.getenv("RAG_AUTH_DISABLED", "0").lower() in {"1", "true", "yes"}
 

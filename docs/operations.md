@@ -9,6 +9,7 @@ This document provides concrete observability queries and alert examples for abu
 ## Logging Backend Assumption
 - Examples use Grafana Loki + LogQL.
 - The backend must emit structured JSON logs (default Python logger with `extra` fields captured by your log pipeline).
+- Forwarded client IP behavior depends on trusted proxy configuration (`RAG_TRUSTED_PROXIES`).
 
 ## Events To Monitor
 - `query_rate_limit_near_exhaustion`
@@ -159,6 +160,9 @@ sum by (user_id) (
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE`
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_USER`
   - `RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS`
+- For workspace ingest budgets:
+  - User-scope checks run before membership verification.
+  - Workspace-scope checks run only after membership verification.
 - Keep `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` stable unless traffic profile requires a larger window.
 
 Related references:
