@@ -5,6 +5,7 @@ This document provides concrete observability queries and alert examples for abu
 - `POST /auth/register`
 - `POST /auth/login`
 - `POST /workspaces/{workspace_id}/ingest`
+- Bearer-protected endpoint auth dependency (token-failure path)
 
 ## Logging Backend Assumption
 - Examples use Grafana Loki + LogQL.
@@ -27,6 +28,12 @@ This document provides concrete observability queries and alert examples for abu
 - `auth_register_rate_limit_redis_init_failed_fallback_memory`
 - `auth_register_rate_limit_redis_unavailable_fallback_memory`
 - `auth_register_rate_limit_redis_recovered`
+- `auth_token_failure`
+- `auth_token_rate_limit_near_exhaustion`
+- `auth_token_rate_limit_denied`
+- `auth_token_rate_limit_redis_init_failed_fallback_memory`
+- `auth_token_rate_limit_redis_unavailable_fallback_memory`
+- `auth_token_rate_limit_redis_recovered`
 - `ingest_rate_limit_near_exhaustion`
 - `ingest_rate_limit_denied`
 - `ingest_rate_limit_redis_init_failed_fallback_memory`
@@ -102,6 +109,24 @@ sum by (rate_limit_scope) (
 )
 ```
 
+Count auth-token failures by reason in the last 5 minutes:
+```logql
+sum by (failure_reason) (
+  count_over_time(
+    {service="rag-backend"} |= "auth_token_failure" [5m]
+  )
+)
+```
+
+Count auth-token rate-limit denials by source IP in the last 5 minutes:
+```logql
+sum by (client_ip) (
+  count_over_time(
+    {service="rag-backend"} |= "auth_token_rate_limit_denied" [5m]
+  )
+)
+```
+
 Count denied upload-ingest requests by workspace in the last 5 minutes:
 ```logql
 sum by (workspace_id) (
@@ -128,6 +153,7 @@ sum by (user_id) (
 - `Top workspaces by deny volume` (table with `workspace_id`, count).
 - `Top client IPs by login deny volume` (table with `client_ip`, count).
 - `Top client IPs by register deny volume` (table with `client_ip`, count).
+- `Auth token failures by reason` (table with `failure_reason`, count).
 - `Top users by ingest deny volume` (table with `user_id`, count).
 
 ## Suggested Alerts
@@ -139,6 +165,8 @@ sum by (user_id) (
 - `AuthLoginBudgetPressure`: trigger when `auth_login_rate_limit_near_exhaustion` grows quickly.
 - `AuthRegisterDeniedSpike`: trigger if register deny count from one IP exceeds threshold in 5m.
 - `AuthRegisterBudgetPressure`: trigger when `auth_register_rate_limit_near_exhaustion` grows quickly.
+- `AuthTokenFailureSpike`: trigger if `auth_token_failure` grows quickly for one IP/reason.
+- `AuthTokenDeniedSpike`: trigger if `auth_token_rate_limit_denied` appears repeatedly for one IP.
 - `IngestDeniedSpike`: trigger if ingest deny count for one workspace or user exceeds threshold in 5m.
 - `IngestBudgetPressure`: trigger when `ingest_rate_limit_near_exhaustion` grows quickly.
 
@@ -156,6 +184,9 @@ sum by (user_id) (
 - Tune register protection separately:
   - `RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS`
   - `RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS`
+- Tune auth-token failure protection separately:
+  - `RAG_AUTH_TOKEN_RATE_LIMIT_REQUESTS`
+  - `RAG_AUTH_TOKEN_RATE_LIMIT_WINDOW_SECONDS`
 - Tune upload-ingest protection separately:
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE`
   - `RAG_INGEST_RATE_LIMIT_REQUESTS_USER`

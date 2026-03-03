@@ -66,6 +66,10 @@ This project includes a minimal governance baseline focused on traceability and 
 - Register throttling emits structured observability logs:
   - `auth_register_rate_limit_near_exhaustion` when remaining budget is low.
   - `auth_register_rate_limit_denied` on enforced `429` responses.
+- Auth-token failure throttling emits structured observability logs:
+  - `auth_token_failure` for `401` token failure reasons.
+  - `auth_token_rate_limit_near_exhaustion` when remaining budget is low.
+  - `auth_token_rate_limit_denied` on enforced `429` responses.
 - Upload-ingest throttling emits structured observability logs:
   - `ingest_rate_limit_near_exhaustion` when remaining budget is low.
   - `ingest_rate_limit_denied` on enforced `429` responses.
@@ -94,6 +98,22 @@ This project includes a minimal governance baseline focused on traceability and 
   - Registration subject hash scope (normalized email hash)
 - Response behavior:
   - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
+
+## Auth Token-Failure Abuse Control
+- Endpoints: all bearer-protected endpoints using auth dependency.
+- Default limits:
+  - `RAG_AUTH_TOKEN_RATE_LIMIT_REQUESTS=30`
+  - `RAG_AUTH_TOKEN_RATE_LIMIT_WINDOW_SECONDS=60`
+- Keying strategy:
+  - Client IP scope (`ip:{client_ip}`)
+- Failure reasons monitored:
+  - `missing_bearer_token`
+  - `invalid_token`
+  - `invalid_token_payload`
+  - `token_user_not_found`
+- Response behavior:
+  - Normal auth failures return HTTP `401`.
+  - Repeated failures beyond budget return HTTP `429` with `Retry-After`.
 
 ## Upload Ingest Abuse Control
 - Endpoint: `POST /workspaces/{workspace_id}/ingest`

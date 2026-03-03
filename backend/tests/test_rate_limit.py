@@ -610,6 +610,30 @@ def test_build_auth_register_rate_limiter_falls_back_when_redis_init_fails(monke
     assert payload["extra"]["error_type"] == "RuntimeError"
 
 
+def test_build_auth_token_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
+    warnings = []
+
+    class _FakeLogger:
+        def warning(self, message: str, **kwargs) -> None:
+            warnings.append((message, kwargs))
+
+    def _boom(**_kwargs):
+        raise RuntimeError("redis client init failed")
+
+    monkeypatch.setattr(rate_limit_module, "RedisWindowRateLimiter", _boom)
+    monkeypatch.setattr(rate_limit_module, "logger", _FakeLogger())
+    monkeypatch.setenv("RAG_REDIS_URL", "redis://localhost:6379/0")
+
+    limiter = rate_limit_module.build_auth_token_rate_limiter()
+
+    assert isinstance(limiter, InMemoryWindowRateLimiter)
+    assert len(warnings) == 1
+    message, payload = warnings[0]
+    assert message == "auth_token_rate_limit_redis_init_failed_fallback_memory"
+    assert payload["extra"]["redis_target"] == "redis://localhost:6379/0"
+    assert payload["extra"]["error_type"] == "RuntimeError"
+
+
 def test_build_ingest_rate_limiter_falls_back_when_redis_init_fails(monkeypatch) -> None:
     warnings = []
 
