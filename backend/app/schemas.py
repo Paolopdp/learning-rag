@@ -6,14 +6,49 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+def normalize_email_value(value: object) -> object:
+    if isinstance(value, str):
+        return value.strip().lower()
+    return value
+
+
+def validate_email_value(value: str) -> str:
+    local, sep, domain = value.partition("@")
+    if sep != "@" or not local or not domain:
+        raise ValueError("Invalid email format.")
+    if any(char.isspace() for char in value):
+        raise ValueError("Invalid email format.")
+    return value
+
+
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=3)
     password: str = Field(min_length=8)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        return normalize_email_value(value)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return validate_email_value(value)
 
 
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3)
     password: str = Field(min_length=1)
+
+    @field_validator("email", mode="before")
+    @classmethod
+    def normalize_email(cls, value: object) -> object:
+        return normalize_email_value(value)
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        return validate_email_value(value)
 
 
 class UserOut(BaseModel):
@@ -44,19 +79,12 @@ class WorkspaceMemberAddRequest(BaseModel):
     @field_validator("email", mode="before")
     @classmethod
     def normalize_email(cls, value: object) -> object:
-        if isinstance(value, str):
-            return value.strip().lower()
-        return value
+        return normalize_email_value(value)
 
     @field_validator("email")
     @classmethod
     def validate_email(cls, value: str) -> str:
-        local, sep, domain = value.partition("@")
-        if sep != "@" or not local or not domain:
-            raise ValueError("Invalid email format.")
-        if any(char.isspace() for char in value):
-            raise ValueError("Invalid email format.")
-        return value
+        return validate_email_value(value)
 
 
 class WorkspaceMemberRoleUpdateRequest(BaseModel):

@@ -156,7 +156,12 @@ Invalid workspace IDs return `400` before any processing.
 PII redaction is applied both at ingestion-time (stored document text) and response-time (query answer/excerpts) for baseline identifiers (`email`, `IBAN`, Italian tax code, credit card).
 Query endpoint now enforces per-workspace rate limiting and returns `429` with `Retry-After` when limits are exceeded.
 Rate-limit counters are stored in Redis (Valkey compatible) by default, with automatic in-memory fallback if Redis is unavailable.
+Login endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when login attempts exceed configured limits.
+Register endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when registration attempts exceed configured limits.
+Upload ingest endpoint enforces abuse-control throttling and returns `429` with `Retry-After` when request budgets are exceeded.
+Protected endpoints also throttle repeated auth-token failures (missing/invalid bearer) and can return `429` with `Retry-After`.
 Governance reference: `docs/governance.md`.
+Operations reference: `docs/operations.md`.
 Threat model reference: `docs/threat-model.md`.
 
 ## Frontend (Minimal UI)
@@ -208,19 +213,39 @@ docker compose --profile observability up -d jaeger
 
 Then open the UI at `http://localhost:16686`.
 
+Rate-limit observability queries and alert examples:
+- `docs/operations.md`
+
 ## Auth Configuration
 Environment variables:
 - `RAG_JWT_SECRET` (required in production; default is dev-only)
 - `RAG_AUTH_DISABLED=1` to bypass auth (tests/dev only)
 - `RAG_CORS_ORIGINS` to override allowed origins (comma-separated)
+- `RAG_TRUSTED_PROXIES` comma-separated trusted proxy IPs/CIDRs for forwarded-header IP resolution (default empty: no forwarded-header trust)
 - `RAG_PII_REDACTION_ENABLED=0` to disable response redaction in local/debug flows
 - `RAG_PII_INGEST_REDACTION_ENABLED=0` to disable ingestion-time redaction in local/debug flows
 - `RAG_PII_BACKEND=presidio` to use Presidio recognizers when optional dependencies are installed (`regex` is default/fallback)
 - `RAG_PII_DEBUG=1` to include Presidio fallback stack traces in logs during troubleshooting
 - `RAG_QUERY_RATE_LIMIT_ENABLED=0` to disable query throttling in local/debug flows
 - `RAG_QUERY_RATE_LIMIT_REQUESTS` to configure max queries per workspace in window (default `20`)
+- `RAG_QUERY_RATE_LIMIT_REQUESTS_MEMBER` optional member-specific max queries per workspace in window (defaults to `RAG_QUERY_RATE_LIMIT_REQUESTS`)
+- `RAG_QUERY_RATE_LIMIT_REQUESTS_ADMIN` optional admin-specific max queries per workspace in window (defaults to `RAG_QUERY_RATE_LIMIT_REQUESTS`)
 - `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` to configure throttle window size (default `60`)
-- `RAG_REDIS_URL` to configure Redis/Valkey endpoint for query throttling (default `redis://localhost:6379/0`)
+- `RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED=0` to disable login throttling in local/debug flows
+- `RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS` to configure max login attempts per key in window (default `10`)
+- `RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS` to configure login throttle window size (default `60`)
+- `RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED=0` to disable register throttling in local/debug flows
+- `RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS` to configure max registration attempts per key in window (default `5`)
+- `RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS` to configure register throttle window size (default `60`)
+- `RAG_AUTH_TOKEN_RATE_LIMIT_ENABLED=0` to disable auth-token failure throttling in local/debug flows
+- `RAG_AUTH_TOKEN_RATE_LIMIT_REQUESTS` to configure max auth-token failures per IP in window (default `30`)
+- `RAG_AUTH_TOKEN_RATE_LIMIT_WINDOW_SECONDS` to configure auth-token failure throttle window size (default `60`)
+- `RAG_INGEST_RATE_LIMIT_ENABLED=0` to disable upload-ingest throttling in local/debug flows
+- `RAG_INGEST_RATE_LIMIT_REQUESTS` to configure default max ingest requests per key in window (default `8`)
+- `RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE` optional workspace-scope max ingest requests in window (defaults to `RAG_INGEST_RATE_LIMIT_REQUESTS`)
+- `RAG_INGEST_RATE_LIMIT_REQUESTS_USER` optional user-scope max ingest requests in window (defaults to `RAG_INGEST_RATE_LIMIT_REQUESTS`)
+- `RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS` to configure ingest throttle window size (default `60`)
+- `RAG_REDIS_URL` to configure Redis/Valkey endpoint for throttling counters (default `redis://localhost:6379/0`)
 - `RAG_INGEST_MAX_FILES` max files accepted per upload ingest request (default `10`)
 - `RAG_INGEST_MAX_FILE_BYTES` max bytes per uploaded file (default `5242880`)
 - `RAG_INGEST_MAX_PDF_PAGES` max parsed pages per uploaded PDF (default `40`)
