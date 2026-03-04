@@ -76,6 +76,10 @@ This project includes a minimal governance baseline focused on traceability and 
 - Proxy/header trust model:
   - Forwarded client IP headers are honored only for `RAG_TRUSTED_PROXIES`.
   - If client IP is unavailable, auth login/register checks fall back to subject scope only.
+- Optional edge throttle layer:
+  - Nginx profile `edge` adds coarse IP-based limits for `/auth/login`, `/auth/register`, `/workspaces/{workspace_id}/query`, and `/workspaces/{workspace_id}/ingest`.
+  - Edge denies return HTTP `429` with header `X-RateLimit-Layer: edge`.
+  - Edge budgets are intentionally coarse and do not replace app-level workspace/user controls.
 
 ## Auth Abuse Control
 - Endpoint: `POST /auth/login`
@@ -128,6 +132,17 @@ This project includes a minimal governance baseline focused on traceability and 
   - Workspace scope key (`workspace:{workspace_id}`) after membership verification
 - Response behavior:
   - Returns HTTP `429` with `Retry-After` when either scope exceeds budget.
+
+## Edge/Global Throttle Baseline
+- Local profile:
+  - `docker compose --profile edge up -d edge-proxy`
+- Config file:
+  - `infra/nginx/rag-edge.conf`
+- Smoke check:
+  - `scripts/smoke_edge_rate_limit.sh`
+- Production guidance:
+  - Keep edge thresholds higher than app-level budgets to avoid masking app-level observability.
+  - Limit trusted proxy CIDRs narrowly when enabling `RAG_TRUSTED_PROXIES`.
 
 ## Query Throttle Presets
 - Local/dev example:

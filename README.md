@@ -76,6 +76,20 @@ Role-policy smoke test (run while backend is up):
 ./scripts/smoke_query_policy_roles.sh
 ```
 
+Optional edge throttle smoke test (run while backend is up):
+```bash
+./scripts/launch_edge_proxy.sh
+./scripts/smoke_edge_rate_limit.sh
+# Optional: increase request count for stress
+EDGE_SMOKE_ATTEMPTS=40 ./scripts/smoke_edge_rate_limit.sh
+```
+This starts an Nginx edge proxy on `http://127.0.0.1:8080` with coarse global budgets for:
+- `/auth/login` and `/auth/register`
+- `/workspaces/{workspace_id}/query`
+- `/workspaces/{workspace_id}/ingest`
+Use this as a first-line shield; app-level per-user/workspace throttles remain the authoritative control.
+If backend IP-scoped controls must use original client IPs behind a trusted proxy, configure `RAG_TRUSTED_PROXIES` with the proxy CIDR(s) explicitly.
+
 ## Demo: Ingest + Query
 ```bash
 # Register a user (creates a default workspace)

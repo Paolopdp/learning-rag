@@ -12,6 +12,19 @@ This document provides concrete observability queries and alert examples for abu
 - The backend must emit structured JSON logs (default Python logger with `extra` fields captured by your log pipeline).
 - Forwarded client IP behavior depends on trusted proxy configuration (`RAG_TRUSTED_PROXIES`).
 
+## Optional Edge Layer
+- Optional Nginx edge profile is available via `docker compose --profile edge up -d edge-proxy`.
+- Edge config path: `infra/nginx/rag-edge.conf`.
+- Edge denies add `X-RateLimit-Layer: edge` and return `429`.
+- Edge emits JSON access logs (`/var/log/nginx/access.log`) with:
+  - `status`
+  - `uri`
+  - `remote_addr`
+  - `rate_limit_layer`
+  - `upstream_status`
+- Local inspection:
+  - `docker compose --profile edge logs edge-proxy --tail=200`
+
 ## Events To Monitor
 - `query_rate_limit_near_exhaustion`
 - `query_rate_limit_denied`
@@ -145,6 +158,15 @@ sum by (user_id) (
 )
 ```
 
+Count edge-level denied requests in the last 5 minutes (Loki ingesting Nginx logs):
+```logql
+sum by (uri) (
+  count_over_time(
+    {service="rag-edge"} |= "\"rate_limit_layer\":\"edge\"" [5m]
+  )
+)
+```
+
 ## Suggested Dashboard Panels
 - `Rate-limit denied / 5m` (stack by `workspace_id`).
 - `Rate-limit near-exhaustion / 5m` (stack by `access_role`).
@@ -155,6 +177,8 @@ sum by (user_id) (
 - `Top client IPs by register deny volume` (table with `client_ip`, count).
 - `Auth token failures by reason` (table with `failure_reason`, count).
 - `Top users by ingest deny volume` (table with `user_id`, count).
+- `Edge denied requests / 5m` (stack by `uri`).
+- `Edge top source IPs` (table by `remote_addr`, count).
 
 ## Suggested Alerts
 - `ThrottleDeniedSpike`: trigger if denied count for one workspace exceeds a threshold in 5m.
@@ -169,6 +193,7 @@ sum by (user_id) (
 - `AuthTokenDeniedSpike`: trigger if `auth_token_rate_limit_denied` appears repeatedly for one IP.
 - `IngestDeniedSpike`: trigger if ingest deny count for one workspace or user exceeds threshold in 5m.
 - `IngestBudgetPressure`: trigger when `ingest_rate_limit_near_exhaustion` grows quickly.
+- `EdgeDeniedSpike`: trigger if edge deny count rises sharply for one URI/IP in 5m.
 
 ## Tuning Workflow
 - Confirm affected scope (`workspace_id`, `access_role`) from logs.
@@ -194,6 +219,9 @@ sum by (user_id) (
 - For workspace ingest budgets:
   - User-scope checks run before membership verification.
   - Workspace-scope checks run only after membership verification.
+- If edge-denied volume spikes before app-denied volume:
+  - Raise edge burst/rate first (`infra/nginx/rag-edge.conf`) to avoid hiding app-level telemetry.
+  - Keep edge as coarse protection and app-level limits as policy enforcement.
 - Keep `RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS` stable unless traffic profile requires a larger window.
 
 Related references:
