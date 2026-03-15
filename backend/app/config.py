@@ -43,6 +43,14 @@ def ingest_max_file_bytes() -> int:
     return max(1, int(os.getenv("RAG_INGEST_MAX_FILE_BYTES", "5242880")))
 
 
+def ingest_max_request_bytes() -> int:
+    # Leave room for multipart framing so valid max-file requests are not clipped.
+    return max(
+        ingest_max_file_bytes(),
+        (ingest_max_files() * ingest_max_file_bytes()) + (1024 * 1024),
+    )
+
+
 def ingest_max_pdf_pages() -> int:
     return max(1, int(os.getenv("RAG_INGEST_MAX_PDF_PAGES", "40")))
 

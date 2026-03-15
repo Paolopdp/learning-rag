@@ -8,7 +8,15 @@ from sqlalchemy import func, select
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from app.audit import audit_enabled, list_events, log_event
-from app.auth import UserContext, create_access_token, get_current_user, hash_password, require_workspace_role, verify_password
+from app.auth import (
+    UserContext,
+    create_access_token,
+    get_current_user,
+    hash_password,
+    request_client_ip,
+    require_workspace_role,
+    verify_password,
+)
 from app.config import (
     auth_disabled,
     cors_origins,
@@ -98,6 +106,7 @@ configure_otel(app)
 
 trusted_proxies = trusted_proxy_hosts()
 if trusted_proxies:
+    # Only trust forwarded headers from proxies we explicitly control.
     app.add_middleware(
         ProxyHeadersMiddleware,
         trusted_hosts=trusted_proxies,
@@ -221,13 +230,13 @@ def login_subject_hash(email: str) -> str:
     return digest.hexdigest()
 
 
-def request_client_ip(request: Request) -> str | None:
-    if request.client is None:
-        return None
-    host = request.client.host.strip() if request.client.host else ""
-    if not host:
-        return None
-    return host
+def ingest_user_rate_limit_key(request: Request, current_user: UserContext) -> str | None:
+    if auth_disabled():
+        client_ip = request_client_ip(request)
+        if client_ip is None:
+            return None
+        return f"ip:{client_ip}"
+    return f"user:{current_user.id}"
 
 
 async def read_upload_with_limit(upload: UploadFile, max_bytes: int) -> bytes:
@@ -776,6 +785,7 @@ def ingest_demo(
 @app.post("/workspaces/{workspace_id}/ingest", response_model=IngestResponse)
 async def ingest_upload(
     workspace_id: str,
+    request: Request,
     files: list[UploadFile] = File(...),
     replace_existing: bool = False,
     current_user: UserContext = Depends(get_current_user),
@@ -786,61 +796,63 @@ async def ingest_upload(
     ingest_limit_workspace_requests = ingest_rate_limit_requests_for_scope("workspace")
     ingest_limit_user_requests = ingest_rate_limit_requests_for_scope("user")
     if ingest_limit_enabled:
-        user_decision = ingest_rate_limiter.check(
-            key=f"user:{current_user.id}",
-            limit=ingest_limit_user_requests,
-            window_seconds=ingest_limit_window_seconds,
-        )
-        if not user_decision.allowed:
-            logger.warning(
-                "ingest_rate_limit_denied",
-                extra={
-                    "workspace_id": workspace_id,
-                    "user_id": current_user.id,
-                    "rate_limit_scope": "user",
-                    "rate_limit_backend": user_decision.backend,
-                    "rate_limit_requests": user_decision.limit,
-                    "rate_limit_window_seconds": user_decision.window_seconds,
-                    "rate_limit_retry_after_seconds": user_decision.retry_after_seconds,
-                },
+        user_limit_key = ingest_user_rate_limit_key(request, current_user)
+        if user_limit_key is not None:
+            user_decision = ingest_rate_limiter.check(
+                key=user_limit_key,
+                limit=ingest_limit_user_requests,
+                window_seconds=ingest_limit_window_seconds,
             )
-            log_event(
-                workspace_id=workspace_id,
-                user_id=None if auth_disabled() else current_user.id,
-                action="ingest_upload",
-                payload={
-                    "outcome": "failure",
-                    "reason": "rate_limited",
-                    "rate_limit_scope": "user",
-                    "rate_limit_backend": user_decision.backend,
-                    "rate_limit_requests": user_decision.limit,
-                    "rate_limit_window_seconds": user_decision.window_seconds,
-                    "rate_limit_retry_after_seconds": user_decision.retry_after_seconds,
-                    "rate_limit_remaining": 0,
-                    "replace_existing": replace_existing,
-                },
-            )
-            raise HTTPException(
-                status_code=429,
-                detail="Too many ingest requests. Please retry later.",
-                headers={"Retry-After": str(user_decision.retry_after_seconds)},
-            )
-        if should_log_rate_limit_near_exhaustion(
-            remaining=user_decision.remaining,
-            limit=user_decision.limit,
-        ):
-            logger.info(
-                "ingest_rate_limit_near_exhaustion",
-                extra={
-                    "workspace_id": workspace_id,
-                    "user_id": current_user.id,
-                    "rate_limit_scope": "user",
-                    "rate_limit_backend": user_decision.backend,
-                    "rate_limit_requests": user_decision.limit,
-                    "rate_limit_window_seconds": user_decision.window_seconds,
-                    "rate_limit_remaining": user_decision.remaining,
-                },
-            )
+            if not user_decision.allowed:
+                logger.warning(
+                    "ingest_rate_limit_denied",
+                    extra={
+                        "workspace_id": workspace_id,
+                        "user_id": current_user.id,
+                        "rate_limit_scope": "user",
+                        "rate_limit_backend": user_decision.backend,
+                        "rate_limit_requests": user_decision.limit,
+                        "rate_limit_window_seconds": user_decision.window_seconds,
+                        "rate_limit_retry_after_seconds": user_decision.retry_after_seconds,
+                    },
+                )
+                log_event(
+                    workspace_id=workspace_id,
+                    user_id=None if auth_disabled() else current_user.id,
+                    action="ingest_upload",
+                    payload={
+                        "outcome": "failure",
+                        "reason": "rate_limited",
+                        "rate_limit_scope": "user",
+                        "rate_limit_backend": user_decision.backend,
+                        "rate_limit_requests": user_decision.limit,
+                        "rate_limit_window_seconds": user_decision.window_seconds,
+                        "rate_limit_retry_after_seconds": user_decision.retry_after_seconds,
+                        "rate_limit_remaining": 0,
+                        "replace_existing": replace_existing,
+                    },
+                )
+                raise HTTPException(
+                    status_code=429,
+                    detail="Too many ingest requests. Please retry later.",
+                    headers={"Retry-After": str(user_decision.retry_after_seconds)},
+                )
+            if should_log_rate_limit_near_exhaustion(
+                remaining=user_decision.remaining,
+                limit=user_decision.limit,
+            ):
+                logger.info(
+                    "ingest_rate_limit_near_exhaustion",
+                    extra={
+                        "workspace_id": workspace_id,
+                        "user_id": current_user.id,
+                        "rate_limit_scope": "user",
+                        "rate_limit_backend": user_decision.backend,
+                        "rate_limit_requests": user_decision.limit,
+                        "rate_limit_window_seconds": user_decision.window_seconds,
+                        "rate_limit_remaining": user_decision.remaining,
+                    },
+                )
 
     require_workspace_role(workspace_id, current_user)
     if ingest_limit_enabled:

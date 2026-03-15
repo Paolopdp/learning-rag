@@ -79,6 +79,17 @@ def _request_with_client_ip(ip: str) -> Request:
     )
 
 
+def _request_without_client() -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/workspaces",
+            "headers": [],
+        }
+    )
+
+
 def test_get_current_user_missing_bearer_returns_401_and_logs_failure(monkeypatch) -> None:
     logger = _CapturingLogger()
     monkeypatch.setattr(auth_module, "auth_disabled", lambda: False)
@@ -154,3 +165,38 @@ def test_get_current_user_invalid_token_logs_near_exhaustion(monkeypatch) -> Non
     assert logger.warning_calls[0][1]["extra"]["failure_reason"] == "invalid_token"
     assert len(logger.info_calls) == 1
     assert logger.info_calls[0][0] == "auth_token_rate_limit_near_exhaustion"
+
+
+def test_request_client_ip_returns_none_when_missing_client() -> None:
+    assert auth_module.request_client_ip(_request_without_client()) is None
+
+
+def test_get_current_user_missing_client_skips_token_rate_limit_bucket(monkeypatch) -> None:
+    checked_keys: list[str] = []
+    logger = _CapturingLogger()
+
+    class _CaptureLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int):
+            checked_keys.append(key)
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=limit - 1,
+                retry_after_seconds=0,
+            )
+
+    monkeypatch.setattr(auth_module, "auth_disabled", lambda: False)
+    monkeypatch.setenv("RAG_AUTH_TOKEN_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setattr(auth_module, "auth_token_rate_limiter", _CaptureLimiter())
+    monkeypatch.setattr(auth_module, "logger", logger)
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_current_user(request=_request_without_client(), credentials=None)
+
+    assert exc_info.value.status_code == 401
+    assert checked_keys == []
+    assert len(logger.warning_calls) == 1
+    assert logger.warning_calls[0][0] == "auth_token_failure"
+    assert logger.warning_calls[0][1]["extra"]["client_ip"] is None

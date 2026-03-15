@@ -135,7 +135,41 @@ def test_ingest_upload_non_member_does_not_hit_workspace_scope_rate_limit(monkey
     )
 
     assert response.status_code == 403
-    assert checked_keys == ["user:00000000-0000-0000-0000-000000000000"]
+    assert checked_keys == ["ip:testclient"]
+
+
+def test_ingest_upload_auth_disabled_uses_client_ip_for_user_scope(monkeypatch) -> None:
+    checked_keys: list[str] = []
+
+    class _AllowLimiter:
+        def check(self, *, key: str, limit: int, window_seconds: int) -> RateLimitDecision:
+            checked_keys.append(key)
+            return RateLimitDecision(
+                allowed=True,
+                backend="memory",
+                limit=limit,
+                window_seconds=window_seconds,
+                remaining=max(0, limit - 1),
+                retry_after_seconds=0,
+            )
+
+    monkeypatch.setenv("RAG_AUTH_DISABLED", "1")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_ENABLED", "1")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE", "10")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_REQUESTS_USER", "10")
+    monkeypatch.setenv("RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS", "60")
+    monkeypatch.setattr(app_main, "ingest_rate_limiter", _AllowLimiter())
+
+    client = TestClient(app)
+    workspace_id = "16161616-1616-1616-1616-161616161616"
+    response = client.post(
+        f"/workspaces/{workspace_id}/ingest",
+        files=[("files", ("doc.txt", b"abc", "text/plain"))],
+    )
+
+    assert response.status_code == 200
+    assert checked_keys[0] == "ip:testclient"
+    assert checked_keys[1] == f"workspace:{workspace_id}"
 
 
 def test_ingest_upload_rate_limit_logs_near_exhaustion(monkeypatch) -> None:

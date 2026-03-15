@@ -79,6 +79,8 @@ This project includes a minimal governance baseline focused on traceability and 
 - Optional edge throttle layer:
   - Nginx profile `edge` adds coarse IP-based limits for `/auth/login`, `/auth/register`, `/workspaces/{workspace_id}/query`, and `/workspaces/{workspace_id}/ingest`.
   - Edge denies return HTTP `429` with header `X-RateLimit-Layer: edge`.
+  - Edge proxy accepts up to `60m` request bodies so default backend multipart uploads are not rejected before app validation.
+  - Edge proxy overwrites `X-Forwarded-For` with the immediate client IP before forwarding to the backend.
   - Edge budgets are intentionally coarse and do not replace app-level workspace/user controls.
 
 ## Auth Abuse Control

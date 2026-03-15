@@ -87,8 +87,9 @@ This starts an Nginx edge proxy on `http://127.0.0.1:8080` with coarse global bu
 - `/auth/login` and `/auth/register`
 - `/workspaces/{workspace_id}/query`
 - `/workspaces/{workspace_id}/ingest`
+The edge profile accepts up to `60m` request bodies so the default backend multipart budget (`10` files x `5 MiB` each, plus framing) is not clipped at the proxy.
 Use this as a first-line shield; app-level per-user/workspace throttles remain the authoritative control.
-If backend IP-scoped controls must use original client IPs behind a trusted proxy, configure `RAG_TRUSTED_PROXIES` with the proxy CIDR(s) explicitly.
+If backend IP-scoped controls must use original client IPs behind a trusted proxy, configure `RAG_TRUSTED_PROXIES` with the proxy CIDR(s) explicitly. The edge proxy overwrites `X-Forwarded-For` with the immediate client IP so trusted-proxy mode does not inherit untrusted header chains.
 
 ## Demo: Ingest + Query
 ```bash

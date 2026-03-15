@@ -16,6 +16,8 @@ This document provides concrete observability queries and alert examples for abu
 - Optional Nginx edge profile is available via `docker compose --profile edge up -d edge-proxy`.
 - Edge config path: `infra/nginx/rag-edge.conf`.
 - Edge denies add `X-RateLimit-Layer: edge` and return `429`.
+- Edge proxy accepts up to `60m` request bodies, matching the default backend multipart request budget.
+- Edge proxy overwrites `X-Forwarded-For` with the immediate client IP before forwarding.
 - Edge emits JSON access logs (`/var/log/nginx/access.log`) with:
   - `status`
   - `uri`

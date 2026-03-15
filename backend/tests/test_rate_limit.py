@@ -162,7 +162,45 @@ def test_proxy_headers_middleware_applies_forwarded_ip_for_trusted_proxy() -> No
         "raw_path": b"/",
         "query_string": b"",
         "root_path": "",
-        "headers": [(b"x-forwarded-for", b"198.51.100.7, 127.0.0.1")],
+        "headers": [(b"x-forwarded-for", b"198.51.100.7")],
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 80),
+    }
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(_message):
+        return None
+
+    asyncio.run(middleware(scope, receive, send))
+    assert captured_client["client"] == ("198.51.100.7", 0)
+
+
+def test_proxy_headers_middleware_uses_single_rewritten_forwarded_ip() -> None:
+    captured_client = {}
+
+    async def downstream_app(scope, receive, send):
+        captured_client["client"] = scope.get("client")
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    middleware = app_main.ProxyHeadersMiddleware(
+        downstream_app,
+        trusted_hosts=["127.0.0.1"],
+    )
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/",
+        "raw_path": b"/",
+        "query_string": b"",
+        "root_path": "",
+        "headers": [(b"x-forwarded-for", b"198.51.100.7")],
         "client": ("127.0.0.1", 12345),
         "server": ("testserver", 80),
     }

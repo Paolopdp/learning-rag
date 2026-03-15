@@ -131,10 +131,13 @@ def get_current_user(
     return UserContext(id=user_id, email=email)
 
 
-def request_client_ip(request: Request) -> str:
-    if request.client is None or not request.client.host:
-        return "unknown"
-    return request.client.host
+def request_client_ip(request: Request) -> str | None:
+    if request.client is None:
+        return None
+    host = request.client.host.strip() if request.client.host else ""
+    if not host:
+        return None
+    return host
 
 
 def should_log_auth_token_rate_limit_near_exhaustion(*, remaining: int, limit: int) -> bool:
@@ -148,7 +151,11 @@ def should_log_auth_token_rate_limit_near_exhaustion(*, remaining: int, limit: i
     return remaining <= threshold
 
 
-def enforce_auth_token_failure_rate_limit(*, client_ip: str, failure_reason: str) -> None:
+def enforce_auth_token_failure_rate_limit(
+    *,
+    client_ip: str | None,
+    failure_reason: str,
+) -> None:
     logger.warning(
         "auth_token_failure",
         extra={
@@ -156,7 +163,7 @@ def enforce_auth_token_failure_rate_limit(*, client_ip: str, failure_reason: str
             "failure_reason": failure_reason,
         },
     )
-    if not auth_token_rate_limit_enabled():
+    if client_ip is None or not auth_token_rate_limit_enabled():
         return
 
     decision = auth_token_rate_limiter.check(
