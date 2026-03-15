@@ -24,7 +24,7 @@ services:
       - "16686:16686"
       - "4318:4318"
   edge-proxy:
-    image: nginx:1.27-alpine
+    image: nginx:1.29-alpine
     profiles:
       - edge
     ports:
