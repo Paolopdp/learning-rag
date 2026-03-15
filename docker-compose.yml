@@ -23,6 +23,16 @@ services:
     ports:
       - "16686:16686"
       - "4318:4318"
+  edge-proxy:
+    image: nginx:1.27-alpine
+    profiles:
+      - edge
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/nginx/rag-edge.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
 
 volumes:
   rag_pgdata:

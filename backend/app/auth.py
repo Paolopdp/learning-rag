@@ -2,21 +2,32 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+import logging
 import uuid
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from sqlalchemy import select
 
 from app.config import auth_disabled, jwt_algorithm, jwt_exp_minutes, jwt_secret
 from app.db import SessionLocal
+from app.rate_limit import (
+    auth_token_rate_limit_enabled,
+    auth_token_rate_limit_requests,
+    auth_token_rate_limit_window_seconds,
+    build_auth_token_rate_limiter,
+)
 from app.sql_models import UserORM, WorkspaceMemberORM
 
 http_bearer = HTTPBearer(auto_error=False)
 password_hasher = PasswordHasher()
+logger = logging.getLogger(__name__)
+auth_token_rate_limiter = build_auth_token_rate_limiter()
+AUTH_TOKEN_RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING = 3
+AUTH_TOKEN_RATE_LIMIT_NEAR_EXHAUSTION_RATIO = 0.2
 
 
 @dataclass(frozen=True)
@@ -57,21 +68,38 @@ def decode_token(token: str) -> dict[str, str]:
 
 
 def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(http_bearer),
 ) -> UserContext:
     if auth_disabled():
         return UserContext(id="00000000-0000-0000-0000-000000000000", email="demo@local")
 
+    client_ip = request_client_ip(request)
     if credentials is None:
+        enforce_auth_token_failure_rate_limit(
+            client_ip=client_ip,
+            failure_reason="missing_bearer_token",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing bearer token.",
         )
 
-    payload = decode_token(credentials.credentials)
+    try:
+        payload = decode_token(credentials.credentials)
+    except HTTPException:
+        enforce_auth_token_failure_rate_limit(
+            client_ip=client_ip,
+            failure_reason="invalid_token",
+        )
+        raise
     user_id = payload.get("sub")
     email = payload.get("email")
     if not user_id or not email:
+        enforce_auth_token_failure_rate_limit(
+            client_ip=client_ip,
+            failure_reason="invalid_token_payload",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload.",
@@ -80,6 +108,10 @@ def get_current_user(
     try:
         user_uuid = uuid.UUID(user_id)
     except ValueError as exc:
+        enforce_auth_token_failure_rate_limit(
+            client_ip=client_ip,
+            failure_reason="invalid_token_payload",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token payload.",
@@ -88,11 +120,90 @@ def get_current_user(
     with SessionLocal() as session:
         user = session.get(UserORM, user_uuid)
         if not user:
+            enforce_auth_token_failure_rate_limit(
+                client_ip=client_ip,
+                failure_reason="token_user_not_found",
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="User not found.",
             )
     return UserContext(id=user_id, email=email)
+
+
+def request_client_ip(request: Request) -> str | None:
+    if request.client is None:
+        return None
+    host = request.client.host.strip() if request.client.host else ""
+    if not host:
+        return None
+    return host
+
+
+def should_log_auth_token_rate_limit_near_exhaustion(*, remaining: int, limit: int) -> bool:
+    threshold = max(
+        1,
+        min(
+            AUTH_TOKEN_RATE_LIMIT_NEAR_EXHAUSTION_MIN_REMAINING,
+            int(limit * AUTH_TOKEN_RATE_LIMIT_NEAR_EXHAUSTION_RATIO),
+        ),
+    )
+    return remaining <= threshold
+
+
+def enforce_auth_token_failure_rate_limit(
+    *,
+    client_ip: str | None,
+    failure_reason: str,
+) -> None:
+    logger.warning(
+        "auth_token_failure",
+        extra={
+            "client_ip": client_ip,
+            "failure_reason": failure_reason,
+        },
+    )
+    if client_ip is None or not auth_token_rate_limit_enabled():
+        return
+
+    decision = auth_token_rate_limiter.check(
+        key=f"ip:{client_ip}",
+        limit=auth_token_rate_limit_requests(),
+        window_seconds=auth_token_rate_limit_window_seconds(),
+    )
+    if not decision.allowed:
+        logger.warning(
+            "auth_token_rate_limit_denied",
+            extra={
+                "client_ip": client_ip,
+                "failure_reason": failure_reason,
+                "rate_limit_backend": decision.backend,
+                "rate_limit_requests": decision.limit,
+                "rate_limit_window_seconds": decision.window_seconds,
+                "rate_limit_retry_after_seconds": decision.retry_after_seconds,
+            },
+        )
+        raise HTTPException(
+            status_code=429,
+            detail="Too many authentication failures. Please retry later.",
+            headers={"Retry-After": str(decision.retry_after_seconds)},
+        )
+
+    if should_log_auth_token_rate_limit_near_exhaustion(
+        remaining=decision.remaining,
+        limit=decision.limit,
+    ):
+        logger.info(
+            "auth_token_rate_limit_near_exhaustion",
+            extra={
+                "client_ip": client_ip,
+                "failure_reason": failure_reason,
+                "rate_limit_backend": decision.backend,
+                "rate_limit_requests": decision.limit,
+                "rate_limit_window_seconds": decision.window_seconds,
+                "rate_limit_remaining": decision.remaining,
+            },
+        )
 
 
 def require_workspace_role(

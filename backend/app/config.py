@@ -43,6 +43,14 @@ def ingest_max_file_bytes() -> int:
     return max(1, int(os.getenv("RAG_INGEST_MAX_FILE_BYTES", "5242880")))
 
 
+def ingest_max_request_bytes() -> int:
+    # Leave room for multipart framing so valid max-file requests are not clipped.
+    return max(
+        ingest_max_file_bytes(),
+        (ingest_max_files() * ingest_max_file_bytes()) + (1024 * 1024),
+    )
+
+
 def ingest_max_pdf_pages() -> int:
     return max(1, int(os.getenv("RAG_INGEST_MAX_PDF_PAGES", "40")))
 
@@ -59,6 +67,11 @@ def cors_origins() -> list[str]:
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ]
+
+
+def trusted_proxy_hosts() -> list[str]:
+    raw = os.getenv("RAG_TRUSTED_PROXIES", "")
+    return [host.strip() for host in raw.split(",") if host.strip()]
 
 
 def auth_disabled() -> bool:

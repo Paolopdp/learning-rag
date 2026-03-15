@@ -18,6 +18,22 @@ def query_rate_limit_enabled() -> bool:
     return os.getenv("RAG_QUERY_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
 
 
+def auth_login_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_AUTH_LOGIN_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
+def auth_register_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_AUTH_REGISTER_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
+def auth_token_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_AUTH_TOKEN_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
+def ingest_rate_limit_enabled() -> bool:
+    return os.getenv("RAG_INGEST_RATE_LIMIT_ENABLED", "1").lower() in _ENABLED_VALUES
+
+
 def redis_url() -> str:
     return os.getenv("RAG_REDIS_URL", "redis://localhost:6379/0")
 
@@ -40,8 +56,70 @@ def query_rate_limit_requests() -> int:
     return _positive_int_env("RAG_QUERY_RATE_LIMIT_REQUESTS", 20)
 
 
+def query_rate_limit_requests_for_role(role: str) -> int:
+    normalized = (role or "").strip().lower()
+    if normalized == "admin":
+        return _positive_int_env(
+            "RAG_QUERY_RATE_LIMIT_REQUESTS_ADMIN",
+            query_rate_limit_requests(),
+        )
+    if normalized == "member":
+        return _positive_int_env(
+            "RAG_QUERY_RATE_LIMIT_REQUESTS_MEMBER",
+            query_rate_limit_requests(),
+        )
+    return query_rate_limit_requests()
+
+
 def query_rate_limit_window_seconds() -> int:
     return _positive_int_env("RAG_QUERY_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def auth_login_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_AUTH_LOGIN_RATE_LIMIT_REQUESTS", 10)
+
+
+def auth_login_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_AUTH_LOGIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def auth_register_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_AUTH_REGISTER_RATE_LIMIT_REQUESTS", 5)
+
+
+def auth_register_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_AUTH_REGISTER_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def auth_token_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_AUTH_TOKEN_RATE_LIMIT_REQUESTS", 30)
+
+
+def auth_token_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_AUTH_TOKEN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
+
+def ingest_rate_limit_requests() -> int:
+    return _positive_int_env("RAG_INGEST_RATE_LIMIT_REQUESTS", 8)
+
+
+def ingest_rate_limit_requests_for_scope(scope: str) -> int:
+    normalized = (scope or "").strip().lower()
+    if normalized == "workspace":
+        return _positive_int_env(
+            "RAG_INGEST_RATE_LIMIT_REQUESTS_WORKSPACE",
+            ingest_rate_limit_requests(),
+        )
+    if normalized == "user":
+        return _positive_int_env(
+            "RAG_INGEST_RATE_LIMIT_REQUESTS_USER",
+            ingest_rate_limit_requests(),
+        )
+    return ingest_rate_limit_requests()
+
+
+def ingest_rate_limit_window_seconds() -> int:
+    return _positive_int_env("RAG_INGEST_RATE_LIMIT_WINDOW_SECONDS", 60)
 
 
 def _positive_int_env(name: str, default: int) -> int:
@@ -158,8 +236,10 @@ return current
         *,
         redis_client=None,
         now_fn: Callable[[], float] | None = None,
+        key_namespace: str = "query",
     ) -> None:
         self._now_fn = now_fn or time.time
+        self._key_namespace = key_namespace
         if redis_client is None:
             self._client = self._build_client()
         else:
@@ -176,7 +256,7 @@ return current
         now = self._now_fn()
         bucket_start = int(now // window_seconds) * window_seconds
         retry_after = max(1, int(math.ceil((bucket_start + window_seconds) - now)))
-        redis_key = f"rag:query_rate_limit:{window_seconds}:{bucket_start}:{key}"
+        redis_key = f"rag:{self._key_namespace}_rate_limit:{window_seconds}:{bucket_start}:{key}"
 
         count = int(
             self._script(
@@ -220,10 +300,18 @@ return current
 
 
 class ResilientRateLimiter:
-    def __init__(self, *, primary, fallback, relog_every_failures: int = 10) -> None:
+    def __init__(
+        self,
+        *,
+        primary,
+        fallback,
+        relog_every_failures: int = 10,
+        event_prefix: str = "query_rate_limit",
+    ) -> None:
         self._primary = primary
         self._fallback = fallback
         self._relog_every_failures = max(1, relog_every_failures)
+        self._event_prefix = event_prefix
         self._consecutive_failures = 0
         self._last_error_type: str | None = None
 
@@ -242,7 +330,7 @@ class ResilientRateLimiter:
             )
             if self._consecutive_failures > 0:
                 logger.info(
-                    "query_rate_limit_redis_recovered",
+                    f"{self._event_prefix}_redis_recovered",
                     extra={
                         "redis_target": redis_target(),
                         "failed_attempts_before_recovery": self._consecutive_failures,
@@ -261,7 +349,7 @@ class ResilientRateLimiter:
             )
             if should_log:
                 logger.warning(
-                    "query_rate_limit_redis_unavailable_fallback_memory",
+                    f"{self._event_prefix}_redis_unavailable_fallback_memory",
                     extra={
                         "redis_target": redis_target(),
                         "error_type": error_type,
@@ -277,13 +365,13 @@ class ResilientRateLimiter:
             )
 
 
-def build_query_rate_limiter():
+def _build_rate_limiter(*, key_namespace: str, event_prefix: str):
     fallback = InMemoryWindowRateLimiter()
     try:
-        primary = RedisWindowRateLimiter()
+        primary = RedisWindowRateLimiter(key_namespace=key_namespace)
     except Exception as exc:
         logger.warning(
-            "query_rate_limit_redis_init_failed_fallback_memory",
+            f"{event_prefix}_redis_init_failed_fallback_memory",
             extra={
                 "redis_target": redis_target(),
                 "error_type": type(exc).__name__,
@@ -291,4 +379,43 @@ def build_query_rate_limiter():
             },
         )
         return fallback
-    return ResilientRateLimiter(primary=primary, fallback=fallback)
+    return ResilientRateLimiter(
+        primary=primary,
+        fallback=fallback,
+        event_prefix=event_prefix,
+    )
+
+
+def build_query_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="query",
+        event_prefix="query_rate_limit",
+    )
+
+
+def build_auth_login_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="auth_login",
+        event_prefix="auth_login_rate_limit",
+    )
+
+
+def build_auth_register_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="auth_register",
+        event_prefix="auth_register_rate_limit",
+    )
+
+
+def build_auth_token_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="auth_token",
+        event_prefix="auth_token_rate_limit",
+    )
+
+
+def build_ingest_rate_limiter():
+    return _build_rate_limiter(
+        key_namespace="ingest",
+        event_prefix="ingest_rate_limit",
+    )
