@@ -25,6 +25,6 @@
     "typescript": "^5"
   },
   "overrides": {
-    "flatted": "3.4.0"
+    "flatted": "3.4.1"
   }
 }
