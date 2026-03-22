@@ -180,6 +180,8 @@ Operations reference: `docs/operations.md`.
 Threat model reference: `docs/threat-model.md`.
 
 ## Frontend (Minimal UI)
+Requires Node.js `>= 20.9.0` because Next.js `16.1.x` enforces that minimum engine.
+
 ```bash
 cd frontend
 npm install
